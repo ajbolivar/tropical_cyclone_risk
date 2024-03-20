@@ -102,8 +102,8 @@ def load_temp(ct_start = None, ct_end = None):
 def load_sp_hum(ct_start = None, ct_end = None):
     return _load_var(get_sp_hum_key(), ct_start, ct_end)
 
-def _load_var_daily(fn):
-    # Daily variables are large cannot be loaded into memory as easily.
+def _load_var_daily_6h(fn):
+    # Daily and 6-hourly variables are large cannot be loaded into memory as easily.
     # So this is an internal function that loads a file directly.
     ds = xr.open_dataset(fn)
     return ds
@@ -135,7 +135,7 @@ def convert_to_datetime(ds, dts):
     return adt
 
 def get_bounding_times():
-    s_dt = datetime.datetime(namelist.start_year, namelist.start_month, 1)
+    s_dt = datetime.datetime(namelist.start_year, namelist.start_month, 1, 0)
     N_day = calendar.monthrange(namelist.end_year, namelist.end_month)[1]
-    e_dt = datetime.datetime(namelist.end_year, namelist.end_month, N_day)
+    e_dt = datetime.datetime(namelist.end_year, namelist.end_month, N_day, 18)
     return (s_dt, e_dt)

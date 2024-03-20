@@ -16,8 +16,8 @@ from track import bam_track, env_wind
 from util import constants
 
 class Coupled_FAST(bam_track.BetaAdvectionTrack):
-    def __init__(self, fn_wnd_stat, basin, dt_start, dt_s, total_time_s):
-        super().__init__(fn_wnd_stat, basin, dt_start, dt_s, total_time_s)
+    def __init__(self, fn_wnd_stat, basin, dt_start, data_ts, dt_s, total_time_s):
+        super().__init__(fn_wnd_stat, basin, dt_start, data_ts, dt_s, total_time_s)
 
         """ FAST Constants """
         self.Ck = namelist.Ck                       # surface enthalpy coefficient
@@ -193,9 +193,9 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
 
     """ Time-derivative of the state vector, y.
     y[0] is longitude, y[1] is latitude, y[2] is v, and y[3] is m."""
-    def dydt(self, t, y):
+    def dydt(self, t, y, data_ts):
         steering_coefs = self._calc_steering_coefs(y[2])
-        v_bam, env_wnds = self._step_bam_track(y[0], y[1], t, steering_coefs)
+        v_bam, env_wnds = self._step_bam_track(y[0], y[1], t, steering_coefs, data_ts)
         dLondt = v_bam[0] / constants.earth_R * 180. / np.pi / (np.cos(y[1] * np.pi / 180.))
         dLatdt = v_bam[1] / constants.earth_R * 180. / np.pi
 
@@ -226,7 +226,7 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
 
     """ Generate a track with an initial position of (clon, clat),
         an initial intensity of v, and initial inner core moisture m """
-    def gen_track(self, clon, clat, v, m = None):
+    def gen_track(self, clon, clat, v, m = None, data_ts = ''):
         # Make sure that tracks are sufficiently randomized.
         bam_track.random_seed()
 
@@ -235,7 +235,7 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
         self.Fs_i = interp1d(self.t_s, self.Fs, axis = 1)
 
         # If the ventilation index is above some threshold, do not integrate.
-        S = self._calc_S(self._env_winds(clon, clat, 0))
+        S = self._calc_S(self._env_winds(clon, clat, 0, data_ts))
         vpot = self._get_current_vpot(clon, clat)
         chi = self._calc_chi(clon, clat)
         if vpot > 0:
@@ -243,7 +243,7 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
             if vent_index >= 1:
                 return None
 
-        def tc_dissipates(t, y):
+        def tc_dissipates(t, y, data_ts):
             if not self.basin.in_basin(y[0], y[1], 1):
                 # Do not let the track wander outside the basin.
                 return 0
@@ -261,7 +261,8 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
             m_init = self._init_m(np.asarray([clon, clat, v]), 0)
         else:
             m_init = m
+
         res = solve_ivp(fun = self.dydt, t_span = (0, self.total_time), y0 = np.asarray([clon, clat, v, m_init]),
-                        t_eval = np.linspace(0, self.total_time, self.total_steps),
+                        args = (data_ts,), t_eval = np.linspace(0, self.total_time, self.total_steps),
                         events = tc_dissipates, max_step = 86400)
         return res

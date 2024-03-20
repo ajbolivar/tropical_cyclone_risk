@@ -22,10 +22,10 @@ from util import basins, input, mat
 Driver function to compute zonal and meridional wind monthly mean and
 covariances, potential intensity, GPI, and saturation deficit.
 """
-def compute_downscaling_inputs():
+def compute_downscaling_inputs(data_ts):
     print('Computing monthly mean and variance of environmental wind...')
     s = time.time()
-    env_wind.gen_wind_mean_cov()
+    env_wind.gen_wind_mean_cov(data_ts)
     e = time.time()
     print('Time Elapsed: %f s' % (e - s))
 
@@ -64,7 +64,6 @@ described by "b" (can be global), in the year.
 """
 def run_tracks(year, n_tracks, b, data_ts):
     # Load thermodynamic and ocean variables.
-    print('AJB: {}'.format(year))
     fn_th = calc_thermo.get_fn_thermo()
     ds = xr.open_dataset(fn_th)
     dt_year_start = datetime.datetime(year-1, 12, 31)
@@ -120,7 +119,7 @@ def run_tracks(year, n_tracks, b, data_ts):
             chi_month = np.maximum(np.minimum(np.exp(np.log(chi_month + 1e-3) + namelist.log_chi_fac) + namelist.chi_fac, 5), 1e-5)
             mld_month = mat.interp_2d_grid(mld['lon'], mld['lat'], np.nan_to_num(mld[:, :, i]), lon, lat)
             strat_month = mat.interp_2d_grid(strat['lon'], strat['lat'], np.nan_to_num(strat[:, :, i]), lon, lat)
-            cpl_fast[i] = coupled_fast.Coupled_FAST(fn_wnd_stat, b, ds_dt_month,
+            cpl_fast[i] = coupled_fast.Coupled_FAST(fn_wnd_stat, b, ds_dt_month, data_ts,
                                                     namelist.output_interval_s, T_s)
             cpl_fast[i].init_fields(lon, lat, chi_month, vpot_month, mld_month, strat_month)
 
@@ -129,7 +128,7 @@ def run_tracks(year, n_tracks, b, data_ts):
         m_init_fx = [0] * 1460
         n_seeds = np.zeros((len(basin_ids), 1460))
 
-        # AJB: Creating array of dates to draw from and removing leap day
+        # Creating array of dates to draw from and removing leap day
         start_date = datetime.datetime(year, 1, 1, 0)
         end_date = datetime.datetime(year, 12, 31, 18)
         interval = datetime.timedelta(hours=6)  # 6-hourly time interval
@@ -141,7 +140,6 @@ def run_tracks(year, n_tracks, b, data_ts):
             dt_6hr = dates[i]
             month_index = int(dt_6hr.month - 1)
             ds_dt_6hr = input.convert_from_datetime(ds_wnd, [dt_6hr])[0]
-            print(i, ds_dt_6hr)
             vpot_6hr = np.nan_to_num(vpot.interp(time = ds_dt_6hr).data, 0)
             rh_mid_6hr = rh_mid.interp(time = ds_dt_6hr).data
             chi_6hr = chi.interp(time = ds_dt_6hr).data
@@ -151,7 +149,7 @@ def run_tracks(year, n_tracks, b, data_ts):
 
             mld_month = mat.interp_2d_grid(mld['lon'], mld['lat'], np.nan_to_num(mld[:, :, month_index]), lon, lat)
             strat_month = mat.interp_2d_grid(strat['lon'], strat['lat'], np.nan_to_num(strat[:, :, month_index]), lon, lat)
-            cpl_fast[i] = coupled_fast.Coupled_FAST(fn_wnd_stat, b, ds_dt_6hr,
+            cpl_fast[i] = coupled_fast.Coupled_FAST(fn_wnd_stat, b, ds_dt_6hr, data_ts,
                                                     namelist.output_interval_s, T_s)
             cpl_fast[i].init_fields(lon, lat, chi_6hr, vpot_6hr, mld_month, strat_month)
 
@@ -171,6 +169,8 @@ def run_tracks(year, n_tracks, b, data_ts):
     tcs_df_list = []
 
     while nt < n_tracks:
+        print()
+        print("Attempting track number = {}".format(nt))
         seed_passed = False
         while not seed_passed:
             # Random genesis location for the seed (weighted by area).
@@ -220,7 +220,7 @@ def run_tracks(year, n_tracks, b, data_ts):
         rh_init = float(m_init_fx[time_seed-1].ev(gen_lon, gen_lat))
         m_init = np.maximum(0, namelist.f_mInit(rh_init))
         fast.h_bl = namelist.atm_bl_depth[basin_ids[basin_idx]]
-        res = fast.gen_track(gen_lon, gen_lat, v_init, m_init)
+        res = fast.gen_track(gen_lon, gen_lat, v_init, m_init, data_ts)
 
         is_tc = False
         if res != None:
@@ -254,9 +254,9 @@ def run_tracks(year, n_tracks, b, data_ts):
                 tc_month[nt] = time_seed
                 tc_basin[nt] = basin_ids[basin_idx]
                 nt += 1
-        else:
-            tcs_df = pd.DataFrame([[gen_lat,gen_lon,time_seed,year]],columns=['lat','lon','month','year'])
-            tcs_df_list.append(tcs_df)
+
+        tcs_df = pd.DataFrame([[gen_lat,gen_lon,time_seed,year]],columns=['lat','lon','month','year'])
+        tcs_df_list.append(tcs_df)
 
     seed_tries = pd.concat(seeds_df_list)
     tc_tries = pd.concat(tcs_df_list)
@@ -324,8 +324,8 @@ def run_downscaling(basin_id, data_ts):
                                      tc_basins = (["n_trk"], tc_basins),                                     
                                      tc_years = (["n_trk"], tc_years),
                                      seeds_per_month = (["year", "basin", name], n_seeds)),
-                    coords = dict(n_trk = range(tc_lon.shape[0]), time = ts_output,
-                                  year = yr_trks, basin = basin_ids, month = t))
+                    coords = {'n_trk': range(tc_lon.shape[0]), 'time': ts_output,
+                              'year': yr_trks, 'basin': basin_ids, name: t})
  
     os.makedirs('%s/%s' % (namelist.base_directory, namelist.exp_name), exist_ok = True)
     fn_trk_out = fn_tracks_duplicates(get_fn_tracks(b))

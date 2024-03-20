@@ -46,7 +46,7 @@ class BetaAdvectionTrack:
     Class that defines methods to generate synthetic tracks using a simple
     beta-advection model.
     """
-    def __init__(self, fn_wnd_stat, basin, dt_start, dt_track = 3600,
+    def __init__(self, fn_wnd_stat, basin, dt_start, data_ts, dt_track = 3600,
                  total_time = 15*24*60*60):
         self.fn_wnd_stat = fn_wnd_stat
         self.dt_track = dt_track                # numerical time step (seconds)
@@ -67,28 +67,36 @@ class BetaAdvectionTrack:
         for i in range(self.nLvl):
             self.u_Mean_idxs[i] = int(self.var_names.index('ua' + str(p_lvls[i]) + '_Mean'))
             self.v_Mean_idxs[i] = int(self.var_names.index('va' + str(p_lvls[i]) + '_Mean'))          
-        self._load_wnd_stat()
+        self._load_wnd_stat(data_ts)
 
     def _interp_basin_field(self, var):
         lon_b, lat_b, var_b = self.basin.transform_global_field(self.wnd_lon, self.wnd_lat, var)
         return mat.interp2_fx(lon_b, lat_b, np.nan_to_num(var_b))
 
-    def _load_wnd_stat(self):
-        wnd_Mean, wnd_Cov = env_wind.read_env_wnd_fn(self.fn_wnd_stat)
-        self.wnd_Mean_Fxs = [0]*len(wnd_Mean)
-        self.wnd_Cov_Fxs = [['' for i in range(len(wnd_Cov))] for j in range(len(wnd_Cov[0]))]
+    def _load_wnd_stat(self, data_ts):
+        if data_ts == 'monthly': 
+            wnd_Mean, wnd_Cov = env_wind.read_env_wnd_fn(self.fn_wnd_stat)
+            self.wnd_Mean_Fxs = [0]*len(wnd_Mean)
+            self.wnd_Cov_Fxs = [['' for i in range(len(wnd_Cov))] for j in range(len(wnd_Cov[0]))]
+            
+        elif data_ts == '6-hourly': 
+            wnd_Mean = env_wind.read_env_wnd_fn(self.fn_wnd_stat, data_ts)
+
         ds = xr.open_dataset(self.fn_wnd_stat)
         self.datetime_start = input.convert_to_datetime(ds, np.array([self.dt_start]))
         self.wnd_lon = wnd_Mean[0]['lon']
         self.wnd_lat = wnd_Mean[0]['lat']
 
-        # Since xarray interpolation is slow, use our own 2-D interpolation.
-        # Only create interpolation functions for the lower trianglular matrix.
-        for i in range(len(wnd_Mean)):
-            self.wnd_Mean_Fxs[i] = self._interp_basin_field(wnd_Mean[i].interp(time = self.dt_start))
-            for j in range(len(wnd_Mean)):
-                if j <= i:
-                    self.wnd_Cov_Fxs[i][j] = self._interp_basin_field(wnd_Cov[i][j].interp(time = self.dt_start))
+        # Calculating weights is not necessary when using 6-hourly data
+        if data_ts == 'monthly':
+            # Since xarray interpolation is slow, use our own 2-D interpolation.
+            # Only create interpolation functions for the lower triangular matrix.
+            for i in range(len(wnd_Mean)):
+                self.wnd_Mean_Fxs[i] = self._interp_basin_field(wnd_Mean[i].interp(time = self.dt_start))
+                for j in range(len(wnd_Mean)):
+                    if j <= i:
+                        self.wnd_Cov_Fxs[i][j] = self._interp_basin_field(wnd_Cov[i][j].interp(time = self.dt_start))
+
 
     def interp_wnd_mean_cov(self, clon, clat, ct):
         wnd_mean = np.zeros(self.nWLvl)
@@ -107,20 +115,30 @@ class BetaAdvectionTrack:
 
         return(wnd_mean, wnd_cov)
 
+    """ Query env_wnd file for nearest 6-hourly winds """
+    def query_wnd_nearest(self, clon, clat, ct):
+        wnd_Mean = env_wind.read_env_wnd_fn(self.fn_wnd_stat, data_ts = '6-hourly')
+        var_Mean = env_wind.wind_mean_vector_names()
+        
+        wnds = np.array([wnd_Mean[x].sel(time=ct,lon=clon,lat=clat,method='nearest').item() for x in range(len(var_Mean))])
+        print(wnds)
+        
+        return wnds
+    
     """ Generate the random Fourier Series """
     def gen_synthetic_f(self):
         N_series = 15                       # number of sine waves
         return(gen_f(N_series, self.T_Fs, self.t_s, self.nWLvl))
 
     """ Calculate environmental winds at a point and time. """
-    def _env_winds(self, clon, clat, ts):
+    def _env_winds(self, clon, clat, ts, data_ts):
         if np.isnan(clon) or np.isnan(ts):
             return np.zeros(self.nWLvl)
 
         ct = self.datetime_start + datetime.timedelta(seconds = ts)
-        wnd_mean, wnd_cov = self.interp_wnd_mean_cov(clon, clat, ct)
         
         if data_ts == 'monthly':
+            wnd_mean, wnd_cov = self.interp_wnd_mean_cov(clon, clat, ct)
             try:
                 wnd_A = np.linalg.cholesky(wnd_cov)
             except np.linalg.LinAlgError as err:
@@ -130,17 +148,17 @@ class BetaAdvectionTrack:
             return wnds
 
         elif data_ts == '6-hourly':
-            # Use unmodified wind information from env_wnd file
-            wnds = wnd_mean
+            print('in elif')
+            wnds = self.query_wnd_nearest(clon, clat, ct)
             return wnds
 
     """ Calculate the translational speeds from the beta advection model """
-    def _step_bam_track(self, clon, clat, ts, steering_coefs):
+    def _step_bam_track(self, clon, clat, ts, steering_coefs, data_ts):
         # Include a hard stop for latitudes above 80 degrees.
         # Ensures that solve_ivp does not go past the domain bounds.
         if np.abs(clat) >= 80:
             return (np.zeros(2), np.zeros(self.nWLvl))
-        wnds = self._env_winds(clon, clat, ts)
+        wnds = self._env_winds(clon, clat, ts, data_ts)
 
         v_bam = np.zeros(2)
         w_lat = np.cos(np.deg2rad(clat))
@@ -148,6 +166,7 @@ class BetaAdvectionTrack:
 
         v_bam[0] = np.dot(wnds[self.u_Mean_idxs], steering_coefs) + self.u_beta * w_lat
         v_bam[1] = np.dot(wnds[self.v_Mean_idxs], steering_coefs) + v_beta_sgn * w_lat
+
         return(v_bam, wnds)
 
     """ Calculate the steering coefficients. """
