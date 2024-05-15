@@ -10,10 +10,14 @@ from util import input
 """
 Returns the name of the file containing environmental wind statistics.
 """
-def get_env_wnd_fn():
-    fn_out = '%s/env_wnd_%s_%d%02d_%d%02d.nc' % (namelist.output_directory, namelist.exp_prefix,
-                                                 namelist.start_year, namelist.start_month,
-                                                 namelist.end_year, namelist.end_month)
+def get_env_wnd_fn(data_ts, year = 999):
+    if data_ts == 'monthly':
+        fn_out = '%s/env_wnd_%s_%d%02d_%d%02d.nc' % (namelist.output_directory, namelist.exp_prefix,
+                                                     namelist.start_year, namelist.start_month,
+                                                     namelist.end_year, namelist.end_month)
+    if data_ts == '6-hourly':
+        fn_out = '%s/env_wnd_%s_%d%02d_%d%02d.nc' % (namelist.output_directory, namelist.exp_prefix,
+                                                     year, 1, year, 12)
     return(fn_out)
 
 """
@@ -48,8 +52,6 @@ Used to generate deep-layer shear.
 """
 def deep_layer_winds(env_wnds):
     var_names = wind_mean_vector_names()
-    print(env_wnds)
-    print(np.shape(np.asarray(env_wnds)))
     u250 = env_wnds[:, var_names.index('ua250_Mean')]
     v250 = env_wnds[:, var_names.index('va250_Mean')]
     u850 = env_wnds[:, var_names.index('ua850_Mean')]
@@ -86,8 +88,8 @@ Generate the wind mean and covariance matrices used to advect
 tropical cyclones.
 """
 def gen_wind_mean_cov(data_ts):
-    fn_out = get_env_wnd_fn()
-    if os.path.exists(fn_out):
+    fn_out = get_env_wnd_fn(data_ts)
+    if (os.path.exists(fn_out)) or (data_ts == '6-hourly'):
         return
 
     # Since the operations are massively parallelized, we want individual
@@ -157,7 +159,6 @@ def wnd_stat_wrapper(args):
     # Compute mean and covariances for upper and lower level horizontal winds.
     out = [0]*nMonths
     for i in range(nMonths):
-        print(t_months[i])
         out[i] = calc_wnd_stat(ua, va, t_months[i], data_ts)
 
     # Save the results using an intermediate file.
@@ -174,7 +175,6 @@ def wnd_stat_wrapper(args):
         ds_wnd.to_netcdf(fn_ds_wnd)
 
     if data_ts == '6-hourly':
-        print('attempting to save')
         da_wnd = xr.DataArray(data = xr.concat(out, dim = "time").transpose("time","stat","lat","lon").data,
                               dims = ['time', 'stat', 'lat', 'lon'],
                               coords = dict(lon = ("lon", ds_ua[input.get_lon_key()].data),
@@ -184,9 +184,7 @@ def wnd_stat_wrapper(args):
         fn_ds_wnd = '%s/env_wnd_%s_p%d%02d_%d%02d.nc' % (namelist.output_directory, namelist.exp_prefix,
                                                          t_months[0].year, t_months[0].month,
                                                          t_months[-1].year, t_months[-1].month)
-        print(fn_ds_wnd)
         ds_wnd.to_netcdf(fn_ds_wnd)
-        print('saved')
 
     return fn_ds_wnd
 

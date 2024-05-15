@@ -1,20 +1,18 @@
 import os
 import numpy as np
-
 """
 Namelist file that serves as the configuration file for the TC-risk model.
 """
-
 ########################## File System Parameters ###########################
 src_directory = os.path.dirname(os.path.abspath(__file__))
-base_directory = '/glade/scratch/abolivar/tc_risk/input/ERA5/standard'
-output_directory = '/glade/scratch/abolivar/tc_risk/output_3600_redux/constant_thermo/HadGEM3-GC31-LM'
-exp_name = 'r1i15p1f1'
+base_directory = '/glade/derecho/scratch/abolivar/tc_risk/input/ERA5/standard'
+output_directory = '/glade/derecho/scratch/abolivar/tc_risk/output/ERA5/6-hourly'
+exp_name = 'parallel_test'
 # For now, we support either 'GCM' or 'ERA5'. Different file types and variable
 # names can be added by modifying the "input.py" file and adding the appropriate
 # variable key words in the structure var_keys.
 dataset_type = 'ERA5' # 'GCM'
-exp_prefix = 'era5_HadGEM3-GC31-LM_r1i15p1f1'
+exp_prefix = 'era5'
 
 # Variable naming based on dataset_type.
 # 'sst' is sea-surface temperature (monthly-averaged)
@@ -23,7 +21,7 @@ exp_prefix = 'era5_HadGEM3-GC31-LM_r1i15p1f1'
 # 'sp_hum' is specific humidity (monthly-averaged)
 # 'u' is zonal wind (daily)
 # 'v' is meridional wind (daily)
-var_keys = {'ERA5': {'sst': 'sst', 'mslp': 'sp', 'temp': 't',
+var_keys = {'ERA5': {'sst': 'sstk', 'mslp': 'sp', 'temp': 't',
                      'sp_hum': 'q', 'u': 'u', 'v': 'v',
                      'lvl': 'level', 'lon': 'longitude', 'lat': 'latitude'},
             'GCM': {'sst': 'tas', 'mslp': 'psl', 'temp': 'ta',
@@ -31,18 +29,25 @@ var_keys = {'ERA5': {'sst': 'sst', 'mslp': 'sp', 'temp': 't',
                     'lvl': 'plev', 'lon': 'lon', 'lat': 'lat'}}
 
 ########################### Data Input Parameters ###########################
-data_ts = 'monthly'      # timestep of input data, 'monthly' or '6-hourly'
-                         # resolutions are supported.
+data_ts = '6-hourly'     # timestep of input data, 'monthly' or '6-hourly'
+seeding = 'random'       # method of storm seeding, 'random' or 'manual'
+# file containing genesis points (lon/lat/date/time)
+gen_points = '/glade/work/abolivar/Pyclogenesis_data/trajectories_ERA5_2005sample.csv'
+# Variable naming for the above file. if 'time' exists, it will override 'year',
+# 'month','day', and 'hour' when accessing the file.
+gen_var_keys = {'trackid': 'SID', 'time': 'ISO_TIME', 'year': 'year', 
+                'month': 'month', 'day': 'day', 'hour': 'hour', 'lon': 'LON', 
+                'lat': 'LAT',}
 ########################### Parallelism Parameters ##########################
-n_procs = 36             # number of processes to use in dask
+n_procs = 1             # number of processes to use in dask
 
 ############################ TC Risk Parameters #############################
 """
 These parameters configure the dates for the TC-risk model.
 """
-start_year = 1979                     # year to start downscaling
+start_year = 1985
 start_month = 1                       # month of start_year to start downscaling
-end_year = 2014                       # year to stop downscaling
+end_year = 1985
 end_month = 12                        # month of end_year to stop downscaling
 
 """
@@ -50,7 +55,7 @@ These parameters configure the output.
 """
 output_interval_s = 3600              # output interval of tracks, seconds (does not change time integration)
 total_track_time_days = 15            # total time to integrate tracks, days
-tracks_per_year = 100                 # total number of tracks to simulate per year
+tracks_per_year = 25                  # total number of tracks to simulate per year (will be overwritten if seeding is set to 'manual')
 
 """
 These parameters configure thermodynamics and thermodynamic constants.

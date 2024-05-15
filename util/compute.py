@@ -22,7 +22,8 @@ from util import basins, input, mat
 Driver function to compute zonal and meridional wind monthly mean and
 covariances, potential intensity, GPI, and saturation deficit.
 """
-def compute_downscaling_inputs(data_ts):
+def compute_downscaling_inputs():
+    data_ts = namelist.data_ts
     print('Computing monthly mean and variance of environmental wind...')
     s = time.time()
     env_wind.gen_wind_mean_cov(data_ts)
@@ -34,6 +35,56 @@ def compute_downscaling_inputs(data_ts):
     calc_thermo.gen_thermo()
     e = time.time()
     print('Time Elapsed: %f s' % (e - s))
+    
+"""
+Splits the file containing seed genesis information into smaller files by year.
+"""
+def create_yearly_files():
+    yearS = namelist.start_year
+    yearE = namelist.end_year
+
+    try:
+        csv = pd.read_csv(namelist.gen_points,
+                          usecols=[input.get_trackid_key(),input.get_year_key(),input.get_month_key(),
+                                   input.get_day_key(),input.get_hour_key(),input.get_genlon_key(),
+                                   input.get_genlat_key()], delimiter=',')
+    except:
+        csv = pd.read_csv(namelist.gen_points,
+                          usecols=[input.get_trackid_key(),input.get_time_key(),
+                                   input.get_genlon_key(),input.get_genlat_key()], delimiter=',')
+
+        # Ensure time is in datetime format
+        dt_time = pd.to_datetime(csv[input.get_time_key()])
+        # Extract year, month, day, and hour from time
+        csv[input.get_year_key()] = dt_time.dt.year
+        csv[input.get_month_key()] = dt_time.dt.month
+        csv[input.get_day_key()] = dt_time.dt.day
+        csv[input.get_hour_key()] = dt_time.dt.hour
+        # Drop time column before saving
+        csv = csv.drop(input.get_time_key(),axis=1)
+
+    # Make sure longitudes are in 0-360 form
+    csv[input.get_genlon_key()] = csv[input.get_genlon_key()] % 360
+    
+    for year in range(yearS,yearE+1):
+        if yearS == yearE:
+            fn_out = '%s/gen_points_%s_%d%02d_%d%02d.csv' % (namelist.output_directory, namelist.exp_prefix, year,
+                                                             namelist.start_month, year, namelist.end_month)
+        elif year == yearS:
+            fn_out = '%s/gen_points_%s_%d%02d_%d12.csv' % (namelist.output_directory, namelist.exp_prefix, year,
+                                                           namelist.start_month, year)
+        elif year == yearE:
+            fn_out = '%s/gen_points_%s_%d01_%d%02d.csv' % (namelist.output_directory, namelist.exp_prefix, year,
+                                                           year, namelist.end_month)
+        else:
+            fn_out = '%s/gen_points_%s_%d01_%d12.csv' % (namelist.output_directory, namelist.exp_prefix, year, year)
+            
+        if os.path.exists(fn_out):
+            continue
+        
+        # Keep only the genesis point of each storm
+        csv_yr = csv.loc[csv[input.get_year_key()] == year].drop_duplicates(subset=[input.get_trackid_key()])
+        csv_yr.to_csv(fn_out)
 
 """
 Returns the name of the file containing downscaled tropical cyclone tracks.
@@ -64,6 +115,7 @@ described by "b" (can be global), in the year.
 """
 def run_tracks(year, n_tracks, b, data_ts):
     # Load thermodynamic and ocean variables.
+    print(year)
     fn_th = calc_thermo.get_fn_thermo()
     ds = xr.open_dataset(fn_th)
     dt_year_start = datetime.datetime(year-1, 12, 31)
@@ -98,11 +150,24 @@ def run_tracks(year, n_tracks, b, data_ts):
     f_b = mat.interp2_fx(basin_mask['lon'], basin_mask['lat'], basin_mask)
     b_bounds = b.get_bounds()
 
+    # Overwrite n_tracks with number of seeds/year if seeding is set to 'manual'
+    if namelist.seeding == 'manual':
+        seed_info = pd.read_csv('%s/gen_points_%s_%d01_%d12.csv' % (namelist.output_directory, namelist.exp_prefix, 
+                                                                    year, year))
+        if seed_info.empty:
+            print(f'No seed information found for {year}. Skipping')
+            return
+            
+        lon_check = seed_info[input.get_genlon_key()].between(b_bounds[0], b_bounds[2])
+        lat_check = seed_info[input.get_genlat_key()].between(b_bounds[1], b_bounds[3])
+        seed_info = seed_info[lon_check & lat_check]
+        n_tracks = len(seed_info)
+        print(f'AJB: n_tracks == {n_tracks}')
+                                  
     # To randomly seed in both space and time, load data for each month in the year.
     T_s = namelist.total_track_time_days * 24 * 60 * 60     # total time to run tracks
-    fn_wnd_stat = env_wind.get_env_wnd_fn()
+    fn_wnd_stat = env_wind.get_env_wnd_fn(data_ts, year)
     ds_wnd = xr.open_dataset(fn_wnd_stat)
-
     if data_ts == 'monthly':
         cpl_fast = [0] * 12
         m_init_fx = [0] * 12
@@ -169,50 +234,70 @@ def run_tracks(year, n_tracks, b, data_ts):
     tcs_df_list = []
 
     while nt < n_tracks:
-        print()
-        print("Attempting track number = {}".format(nt))
-        seed_passed = False
-        while not seed_passed:
-            # Random genesis location for the seed (weighted by area).
-            # Ensure that it is located within the basin and over ocean.
-            # Genesis is [3, 45] latitude for each basin.
-            lat_min = 3 if np.sign(b_bounds[1]) >= 0 else -45
-            lat_max = 45 if np.sign(b_bounds[3]) >= 0 else -3
-            y_min = np.sin(np.pi / 180 * lat_min)
-            y_max = np.sin(np.pi / 180 * lat_max)
-            gen_lon = np.random.uniform(b_bounds[0], b_bounds[2], 1)[0]
-            gen_lat = np.arcsin(np.random.uniform(y_min, y_max, 1)[0]) * 180 / np.pi
-            while f_b.ev(gen_lon, gen_lat) < 1e-2:
-                gen_lon = np.random.uniform(b_bounds[0], b_bounds[2], 1)[0]
-                gen_lat = np.arcsin(np.random.uniform(y_min, y_max, 1)[0]) * 180 / np.pi
-            
-            if data_ts == 'monthly':
-                # Randomly seed the month.
-                time_seed = np.random.randint(1, 13)
-            if data_ts == '6-hourly':
-                # Randomly seed the 6-hour timestep.
-                time_seed = np.random.randint(1,1461)
+        print(f"Attempting track number = {nt}")
+        # Skip seed check for manual seeding
+        if namelist.seeding == 'manual':
+            print('manual seeding')
+            gen_lon = seed_info[input.get_genlon_key()][nt]
+            gen_lat = seed_info[input.get_genlat_key()][nt]
+            gen_t   = pd.to_datetime('2001' + str(seed_info[input.get_month_key()][nt]) +
+                                     str(seed_info[input.get_day_key()][nt]) +
+                                     str(seed_info[input.get_hour_key()][nt]),
+                                     format='%Y%m%d%H')
 
-            fast = cpl_fast[time_seed - 1]
+            time_seed = int(((gen_t.dayofyear - 1) * 4) + gen_t.hour/6)
+            print(gen_lon, gen_lat, gen_t, time_seed)
+            fast = cpl_fast[time_seed]
 
             # Find basin of genesis location and switch H_bl.
             basin_val = np.zeros(len(basin_ids))
             for (b_idx, basin_id) in enumerate(basin_ids):
                 basin_val[b_idx] = f_basins[basin_id].ev(gen_lon, gen_lat)
             basin_idx = np.argmax(basin_val)
-
-            # Discard seeds with increasing probability equatorwards.
-            # If PI is less than 35 m/s, do not integrate, but treat as a seed.
-            pi_gen = float(fast.f_vpot.ev(gen_lon, gen_lat))
-            lat_vort_power = namelist.lat_vort_power[basin_ids[basin_idx]]
-            prob_lowlat = np.power(np.minimum(np.maximum((np.abs(gen_lat) - namelist.lat_vort_fac) / 12.0, 0), 1), lat_vort_power)
-            rand_lowlat = np.random.uniform(0, 1, 1)[0]
-            if (np.nanmax(basin_val) > 1e-3) and (rand_lowlat < prob_lowlat):
-                n_seeds[basin_idx, time_seed-1] += 1
+            
+        if namelist.seeding == 'random':
+            seed_passed = False
+            while not seed_passed:
+                # Random genesis location for the seed (weighted by area).
+                # Ensure that it is located within the basin and over ocean.
+                # Genesis is [3, 45] latitude for each basin.
+                lat_min = 3 if np.sign(b_bounds[1]) >= 0 else -45
+                lat_max = 45 if np.sign(b_bounds[3]) >= 0 else -3
+                y_min = np.sin(np.pi / 180 * lat_min)
+                y_max = np.sin(np.pi / 180 * lat_max)
+                gen_lon = np.random.uniform(b_bounds[0], b_bounds[2], 1)[0]
+                gen_lat = np.arcsin(np.random.uniform(y_min, y_max, 1)[0]) * 180 / np.pi
+                while f_b.ev(gen_lon, gen_lat) < 1e-2:
+                    gen_lon = np.random.uniform(b_bounds[0], b_bounds[2], 1)[0]
+                    gen_lat = np.arcsin(np.random.uniform(y_min, y_max, 1)[0]) * 180 / np.pi
+                
+                if data_ts == 'monthly':
+                    # Randomly seed the month.
+                    time_seed = np.random.randint(1, 13)
+                if data_ts == '6-hourly':
+                    # Randomly seed the 6-hour timestep.
+                    time_seed = np.random.randint(1,1461)
+    
+                fast = cpl_fast[time_seed - 1]
+    
+                # Find basin of genesis location and switch H_bl.
+                basin_val = np.zeros(len(basin_ids))
+                for (b_idx, basin_id) in enumerate(basin_ids):
+                    basin_val[b_idx] = f_basins[basin_id].ev(gen_lon, gen_lat)
+                basin_idx = np.argmax(basin_val)
+    
+                # Discard seeds with increasing probability equatorwards.
+                # If PI is less than 35 m/s, do not integrate, but treat as a seed.
+                pi_gen = float(fast.f_vpot.ev(gen_lon, gen_lat))
+                lat_vort_power = namelist.lat_vort_power[basin_ids[basin_idx]]
+                prob_lowlat = np.power(np.minimum(np.maximum((np.abs(gen_lat) - namelist.lat_vort_fac) / 12.0, 0), 1), lat_vort_power)
+                rand_lowlat = np.random.uniform(0, 1, 1)[0]
                 seed_df = pd.DataFrame([[gen_lat,gen_lon,time_seed,year]],columns=['lat','lon','month','year'])
                 seeds_df_list.append(seed_df)
-                if (pi_gen > 35):
-                    seed_passed = True
+                if (np.nanmax(basin_val) > 1e-3) and (rand_lowlat < prob_lowlat):
+                    n_seeds[basin_idx, time_seed-1] += 1
+                    if (pi_gen > 35):
+                        seed_passed = True
 
         # Set the initial value of m to a function of relative humidity.
         v_init = namelist.seed_v_init_ms + np.random.randn(1)[0]
@@ -235,6 +320,9 @@ def run_tracks(year, n_tracks, b, data_ts):
             v_thresh_2d = np.interp(2*24*60*60, res.t, v_track.flatten())
             is_tc = np.logical_and(np.any(v_track >= v_thresh), v_thresh_2d >= namelist.seed_v_2d_threshold_ms)
 
+        # Skip TC threshold check for manual seeding
+        # No stochastic wind generation, so track integration will be identical for repeated attempts
+        if namelist.seeding == 'manual': is_tc = True
         if is_tc:
             n_time = len(track_lon)
             tc_lon[nt, 0:n_time] = track_lon
@@ -258,8 +346,13 @@ def run_tracks(year, n_tracks, b, data_ts):
         tcs_df = pd.DataFrame([[gen_lat,gen_lon,time_seed,year]],columns=['lat','lon','month','year'])
         tcs_df_list.append(tcs_df)
 
-    seed_tries = pd.concat(seeds_df_list)
-    tc_tries = pd.concat(tcs_df_list)
+    # If no spatial seed info retained, create empty DataFrame
+    if not seeds_df_list: seed_tries = pd.DataFrame(columns=['lat','lon','month','year'])
+    else: seed_tries = pd.concat(seeds_df_list)
+    # This shouldn't trigger, but just in case.
+    # If no spatial TC attempt info retained, create empty DataFrame
+    if not tcs_df_list: tc_tries = pd.DataFrame(columns=['lat','lon','month','year'])
+    else: tc_tries = pd.concat(tcs_df_list)
 
     return((tc_lon, tc_lat, tc_v, tc_m, tc_vmax, tc_env_wnds, tc_month, tc_basin, n_seeds, seed_tries, tc_tries))
 
@@ -267,13 +360,18 @@ def run_tracks(year, n_tracks, b, data_ts):
 Runs the downscaling model in basin "basin_id" according to the
 settings in the namelist.txt file.
 """
-def run_downscaling(basin_id, data_ts):
+def run_downscaling(basin_id):
+    data_ts = namelist.data_ts
     n_tracks = namelist.tracks_per_year   # number of tracks per year
     n_procs = namelist.n_procs
     b = basins.TC_Basin(basin_id)
     yearS = namelist.start_year
     yearE = namelist.end_year
-
+    
+    if (namelist.seeding == 'manual') & (namelist.data_ts == 'monthly'):
+        print('Error: manual seeding only supported for 6-hourly data!')
+        return
+        
     lazy_results = []; f_args = [];
     for yr in range(yearS, yearE+1):
         lazy_result = dask.delayed(run_tracks)(yr, n_tracks, b, data_ts)

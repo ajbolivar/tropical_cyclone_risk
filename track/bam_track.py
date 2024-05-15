@@ -121,8 +121,6 @@ class BetaAdvectionTrack:
         var_Mean = env_wind.wind_mean_vector_names()
         
         wnds = np.array([wnd_Mean[x].sel(time=ct,lon=clon,lat=clat,method='nearest').item() for x in range(len(var_Mean))])
-        print(wnds)
-        
         return wnds
     
     """ Generate the random Fourier Series """
@@ -148,7 +146,6 @@ class BetaAdvectionTrack:
             return wnds
 
         elif data_ts == '6-hourly':
-            print('in elif')
             wnds = self.query_wnd_nearest(clon, clat, ct)
             return wnds
 

@@ -7,6 +7,7 @@
 import dask
 import datetime
 import os
+import glob
 import namelist
 import numpy as np
 import xarray as xr
@@ -19,7 +20,6 @@ def get_fn_thermo():
                                                namelist.start_year, namelist.start_month,
                                                namelist.end_year, namelist.end_month)
     return(fn_th)
-
 
 def compute_thermo(dt_start, dt_end):
     ds_sst = input.load_sst(dt_start, dt_end).load()
@@ -46,7 +46,7 @@ def compute_thermo(dt_start, dt_end):
         ta = ds_ta[input.get_temp_key()][i, :, :, :]
         hus = ds_hus[input.get_sp_hum_key()][i, :, :, :]
         lvl = ds_ta[input.get_lvl_key()]
-        lvl_d = ds_ta[input.get_lvl_key()].data
+        lvl_d = (ds_ta[input.get_lvl_key()]).copy().data
 
         # Ensure lowest model level is first.
         # Here we assume the model levels are in pressure.
@@ -86,6 +86,20 @@ def gen_thermo():
     # TODO: Assert all of the datasets have the same length in time.
     if os.path.exists(get_fn_thermo()):
         return
+    # If specific thermo file does not exist but data is contained in larger thermo file,
+    # save subset of data from larger file.
+    elif glob.glob('%s/thermo*.nc' % namelist.output_directory):
+        for file in thermo_files:
+            part = file.split('/')[-1].split('_') # Isolate file name from path
+            syr = int(part[-2][0:4]) # Isolate start year from file name
+            eyr = int(part[-1].split('.')[0][0:4]) # Isolate end year from file name
+            # Check if year is in this range, save subset from existing thermo file
+            if year in range(syr,eyr):
+                thermo = xr.open_dataset(file)
+                thermo_ss = thermo.sel(time=slice('%s-%02d' % namelist.start_year, namelist.start_month,
+                                                  '%s-%02d' % namelist.end_year, namelist.end_month))
+                thermo_ss.to_netcdf(get_fn_thermo())
+            
 
     n_chunks = namelist.n_procs
     chunks = np.array_split(ds_times, n_chunks)
