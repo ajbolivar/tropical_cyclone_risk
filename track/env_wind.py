@@ -55,7 +55,7 @@ def deep_layer_winds(env_wnds):
     u250 = env_wnds[:, var_names.index('ua250_Mean')]
     v250 = env_wnds[:, var_names.index('va250_Mean')]
     u850 = env_wnds[:, var_names.index('ua850_Mean')]
-    v850 = env_wnds[:, var_names.index('va850_Mean')]   
+    v850 = env_wnds[:, var_names.index('va850_Mean')]
     return (u250, v250, u850, v850)
 
 """

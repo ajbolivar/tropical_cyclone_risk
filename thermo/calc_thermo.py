@@ -55,9 +55,9 @@ def compute_thermo(dt_start, dt_end):
             hus = hus.reindex({input.get_lvl_key(): lvl[::-1]})
             lvl_d = lvl_d[::-1]
     
-        p_midlevel = namelist.p_midlevel                # Pa
+        p_midlevel = namelist.p_midlevel                    # Pa
         if lvl.units in ['millibars', 'hPa']:
-            lvl_d *= 100
+            lvl_d *= 100                                    # needs to be in Pa
             p_midlevel = namelist.p_midlevel / 100          # hPa
             lvl_mid = lvl.sel({input.get_lvl_key(): p_midlevel}, method = 'nearest')
 
@@ -76,6 +76,10 @@ def compute_thermo(dt_start, dt_end):
     return (vmax, chi, rh_mid)
 
 def gen_thermo():
+    # TODO: Assert all of the datasets have the same length in time.
+    if os.path.exists(get_fn_thermo()):
+        return
+
     # Load datasets metadata. Since SST is split into multiple files and can
     # cause parallel reads with open_mfdataset to hang, save as a single file.
     dt_start, dt_end = input.get_bounding_times()
@@ -103,7 +107,6 @@ def gen_thermo():
                                                   '%s-%02d' % namelist.end_year, namelist.end_month))
                 thermo_ss.to_netcdf(get_fn_thermo())
             
-
     n_chunks = namelist.n_procs
     chunks = np.array_split(ds_times, np.minimum(n_chunks, np.floor(len(ds_times) / 2)))
     lazy_results = []
