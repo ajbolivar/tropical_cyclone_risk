@@ -10,14 +10,15 @@ from util import constants, input, sphere
 """
 Returns the name of the file containing environmental wind statistics.
 """
-def get_env_wnd_fn(data_ts, year = 999):
-    if data_ts == 'monthly':
+def get_env_wnd_fn(year = 999):
+    if namelist.gnu_parallel == True:
+        fn_out = '%s/env_wnd_%s_%d%02d_%d%02d.nc' % (namelist.output_directory, namelist.exp_prefix,
+                                                     year, 1, year, 12)
+    else:
         fn_out = '%s/env_wnd_%s_%d%02d_%d%02d.nc' % (namelist.output_directory, namelist.exp_prefix,
                                                      namelist.start_year, namelist.start_month,
                                                      namelist.end_year, namelist.end_month)
-    if data_ts == '6-hourly':
-        fn_out = '%s/env_wnd_%s_%d%02d_%d%02d.nc' % (namelist.output_directory, namelist.exp_prefix,
-                                                     year, 1, year, 12)
+
     return(fn_out)
 
 """
@@ -90,19 +91,19 @@ def read_env_wnd_fn(fn_wnd_stat, data_ts, dt_s = None, dt_e = None):
 Generate the wind mean and covariance matrices used to advect
 tropical cyclones.
 """
-def gen_wind_mean_cov(data_ts):
-    fn_out = get_env_wnd_fn(data_ts)
+def gen_wind_mean_cov(data_ts, year=999):
+    fn_out = get_env_wnd_fn(year)
     if (os.path.exists(fn_out)) or (data_ts == '6-hourly'):
+        print(f"File {fn_out} exists. Skipping...")
         return
 
     # Since the operations are massively parallelized, we want individual
     # control over the files being opened.
     fns_ua = input._glob_prefix(input.get_u_key())
     fns_va = input._glob_prefix(input.get_v_key())
-   
     lazy_results = []
     for i in range(min(len(fns_ua), len(fns_va))):
-        lazy_result = dask.delayed(wnd_stat_wrapper)((fns_ua[i], fns_va[i], data_ts))
+        lazy_result = dask.delayed(wnd_stat_wrapper)((fns_ua[i], fns_va[i], data_ts, year))
         lazy_results.append(lazy_result)
     out = dask.compute(*lazy_results)
     out_fns = [x for x in out if x is not None]
@@ -131,9 +132,13 @@ def gen_wind_mean_cov(data_ts):
         os.remove(fn)
 
 def wnd_stat_wrapper(args):
-    fn_u, fn_v, data_ts = args
+    fn_u, fn_v, data_ts, year  = args
 
-    dt_start, dt_end = input.get_bounding_times()
+    if namelist.gnu_parallel == True:
+        dt_start = datetime.datetime(year, 1, 1, 0)
+        dt_end = datetime.datetime(year, 12, 31, 18)
+    else: dt_start, dt_end = input.get_bounding_times()
+    
     ds_ua = input._load_var_daily_6h(fn_u)
     ds_va = input._load_var_daily_6h(fn_v)
     ua = ds_ua[input.get_u_key()]
@@ -154,7 +159,6 @@ def wnd_stat_wrapper(args):
 
     t_months = t_months[0:-1]
     nMonths = len(t_months)
-
     # No computations found for this file.
     if nMonths == 0:
         return
@@ -214,6 +218,7 @@ def calc_wnd_stat(ua, va, dt, data_ts):
 
     # If time step is less than one day, group by day.
     dt_step = (np.timedelta64(1, 'D') - (ua['time'][1] - ua['time'][0]).data) / np.timedelta64(1, 's')
+
     if dt_step < 0:
         ua_month = ua.sel(time = month_mask).groupby("time.day").mean(dim = 'time')
         va_month = va.sel(time = month_mask).groupby("time.day").mean(dim = 'time')
@@ -247,7 +252,6 @@ def calc_wnd_stat(ua, va, dt, data_ts):
         wnd_vars = [[x for x in y if len(x) > 0] for y in month_var_wnds]
         stats = sum(wnd_vars, month_mean_wnds)
         wnd_stats = np.zeros((len(stats),) + month_mean_wnds[0].shape)
-
         for i in range(len(stats)):
             wnd_stats[i, :, :] = stats[i]
 
@@ -257,10 +261,6 @@ def calc_wnd_stat(ua, va, dt, data_ts):
                 coords = dict(
                     lon=(ua[input.get_lon_key()].values),
                     lat=(ua[input.get_lat_key()].values)))
-
-        for i in range(len(stats)):
-            wnd_stats[i, :, :, :] = stats[i]
-
 
     elif data_ts == '6-hourly':
         wnd_stats = xr.concat(month_wnds,dim="stat").rename({"latitude": "lat", "longitude": "lon"}).drop_vars('level')

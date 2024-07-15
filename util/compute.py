@@ -22,26 +22,33 @@ from util import basins, input, mat
 Driver function to compute zonal and meridional wind monthly mean and
 covariances, potential intensity, GPI, and saturation deficit.
 """
-def compute_downscaling_inputs():
+def compute_downscaling_inputs(year = 999):
     data_ts = namelist.data_ts
     print('Computing monthly mean and variance of environmental wind...')
     s = time.time()
-    env_wind.gen_wind_mean_cov(data_ts)
+    if namelist.gnu_parallel == True: env_wind.gen_wind_mean_cov(data_ts, year)
+    else: env_wind.gen_wind_mean_cov(data_ts)
     e = time.time()
     print('Time Elapsed: %f s' % (e - s))
 
     print('Computing thermodynamic variables...')
     s = time.time()
-    calc_thermo.gen_thermo()
+    if namelist.gnu_parallel == True: 
+        calc_thermo.gen_thermo(year)
+    else: calc_thermo.gen_thermo()
     e = time.time()
     print('Time Elapsed: %f s' % (e - s))
     
 """
 Splits the file containing seed genesis information into smaller files by year.
 """
-def create_yearly_files():
+def create_yearly_files(year = 999):
     yearS = namelist.start_year
     yearE = namelist.end_year
+
+    if namelist.gnu_parallel == True:
+        yearS = year
+        yearE = year
 
     try:
         csv = pd.read_csv(namelist.gen_points,
@@ -89,12 +96,19 @@ def create_yearly_files():
 """
 Returns the name of the file containing downscaled tropical cyclone tracks.
 """
-def get_fn_tracks(b):
-    fn_args = (namelist.output_directory, namelist.exp_name,
-               b.basin_id, namelist.exp_prefix,
-               namelist.start_year, namelist.start_month,
-               namelist.end_year, namelist.end_month)
-    fn_trk = '%s/%s/tracks_%s_%s_%d%02d_%d%02d.nc' % fn_args
+def get_fn_tracks(b, year=999):
+    if namelist.gnu_parallel == True:
+        fn_args = (namelist.output_directory, namelist.exp_name,
+                   b.basin_id, namelist.exp_prefix, year, 1,
+                   year, 12)
+        fn_trk = '%s/%s/tracks_%s_%s_%d%02d_%d%02d.nc' % fn_args
+        
+    else:
+        fn_args = (namelist.output_directory, namelist.exp_name,
+                   b.basin_id, namelist.exp_prefix,
+                   namelist.start_year, namelist.start_month,
+                   namelist.end_year, namelist.end_month)
+        fn_trk = '%s/%s/tracks_%s_%s_%d%02d_%d%02d.nc' % fn_args
     return(fn_trk)
 
 """
@@ -116,7 +130,8 @@ described by "b" (can be global), in the year.
 def run_tracks(year, n_tracks, b, data_ts):
     # Load thermodynamic and ocean variables.
     print(year)
-    fn_th = calc_thermo.get_fn_thermo()
+    if namelist.gnu_parallel == True: fn_th = calc_thermo.get_fn_thermo(year)
+    else: fn_th = calc_thermo.get_fn_thermo()
     ds = xr.open_dataset(fn_th)
     dt_year_start = datetime.datetime(year-1, 12, 31)
     dt_year_end = datetime.datetime(year, 12, 31)
@@ -166,7 +181,7 @@ def run_tracks(year, n_tracks, b, data_ts):
                                   
     # To randomly seed in both space and time, load data for each month in the year.
     T_s = namelist.total_track_time_days * 24 * 60 * 60     # total time to run tracks
-    fn_wnd_stat = env_wind.get_env_wnd_fn(data_ts, year)
+    fn_wnd_stat = env_wind.get_env_wnd_fn(year)
     ds_wnd = xr.open_dataset(fn_wnd_stat)
     if data_ts == 'monthly':
         cpl_fast = [0] * 12
@@ -360,18 +375,29 @@ def run_tracks(year, n_tracks, b, data_ts):
 Runs the downscaling model in basin "basin_id" according to the
 settings in the namelist.txt file.
 """
-def run_downscaling(basin_id):
+def run_downscaling(basin_id, year = 999):
     data_ts = namelist.data_ts
     n_tracks = namelist.tracks_per_year   # number of tracks per year
     n_procs = namelist.n_procs
     b = basins.TC_Basin(basin_id)
     yearS = namelist.start_year
     yearE = namelist.end_year
+
+    if namelist.gnu_parallel == True:
+        yearS = year
+        yearE = year
     
     if (namelist.seeding == 'manual') & (namelist.data_ts == 'monthly'):
         print('Error: manual seeding only supported for 6-hourly data!')
         return
-        
+
+    if namelist.gnu_parallel == True: fn_trk_out = fn_tracks_duplicates(get_fn_tracks(b, year))
+    else: fn_trk_out = fn_tracks_duplicates(get_fn_tracks(b))
+
+    if os.path.exists(fn_trk_out):
+        print(f"File {fn_trk_out} already exists.")
+        return
+
     lazy_results = []; f_args = [];
     for yr in range(yearS, yearE+1):
         lazy_result = dask.delayed(run_tracks)(yr, n_tracks, b, data_ts)
@@ -426,7 +452,8 @@ def run_downscaling(basin_id):
                               'year': yr_trks, 'basin': basin_ids, name: t})
  
     os.makedirs('%s/%s' % (namelist.base_directory, namelist.exp_name), exist_ok = True)
-    fn_trk_out = fn_tracks_duplicates(get_fn_tracks(b))
+    if namelist.gnu_parallel == True: fn_trk_out = fn_tracks_duplicates(get_fn_tracks(b, year))
+    else: fn_trk_out = fn_tracks_duplicates(get_fn_tracks(b))
     seed_tries.to_csv('%s/%s/seed_tries_%s.csv' % (namelist.output_directory, namelist.exp_name, namelist.exp_prefix), mode = 'w')
     tc_tries.to_csv('%s/%s/tc_tries_%s.csv' % (namelist.output_directory, namelist.exp_name, namelist.exp_prefix), mode = 'w')
     ds.to_netcdf(fn_trk_out, mode = 'w')

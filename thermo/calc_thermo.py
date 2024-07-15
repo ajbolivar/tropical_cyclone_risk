@@ -15,10 +15,14 @@ import xarray as xr
 from util import input, mat
 from thermo import thermo
 
-def get_fn_thermo():
-    fn_th = '%s/thermo_%s_%d%02d_%d%02d.nc' % (namelist.output_directory, namelist.exp_prefix,
-                                               namelist.start_year, namelist.start_month,
-                                               namelist.end_year, namelist.end_month)
+def get_fn_thermo(year = 999):
+    if namelist.gnu_parallel == True:
+        fn_th = '%s/thermo_%s_%d01_%d12.nc' % (namelist.output_directory, namelist.exp_prefix,
+                                               year, year)
+    else:
+        fn_th = '%s/thermo_%s_%d%02d_%d%02d.nc' % (namelist.output_directory, namelist.exp_prefix,
+                                                   namelist.start_year, namelist.start_month,
+                                                   namelist.end_year, namelist.end_month)
     return(fn_th)
 
 def compute_thermo(dt_start, dt_end):
@@ -75,27 +79,39 @@ def compute_thermo(dt_start, dt_end):
 
     return (vmax, chi, rh_mid)
 
-def gen_thermo():
+def gen_thermo(year = 999):
+    # Get thermo file name
+    if namelist.gnu_parallel == True: fn_out = get_fn_thermo(year)
+    else: fn_out = get_fn_thermo()
     # TODO: Assert all of the datasets have the same length in time.
-    if os.path.exists(get_fn_thermo()):
+    # Check if file exists
+    if os.path.exists(fn_out):
+        print(f"File {fn_out} exists. Skipping...")
         return
 
     # Load datasets metadata. Since SST is split into multiple files and can
     # cause parallel reads with open_mfdataset to hang, save as a single file.
-    dt_start, dt_end = input.get_bounding_times()
+    if namelist.gnu_parallel == True: 
+        dt_start = datetime.datetime(year, 1, 1, 0)
+        dt_end = datetime.datetime(year, 12, 31, 18)
+    else: dt_start, dt_end = input.get_bounding_times()
+
+    start_year = dt_start.year
+    end_year = dt_end.year
+    start_month = dt_start.month
+    end_month = dt_end.month
+    
     ds = input.load_mslp()
 
     ct_bounds = [dt_start, dt_end]
     ds_times = input.convert_from_datetime(ds,
                    np.array([x for x in input.convert_to_datetime(ds, ds['time'].values)
                              if x >= ct_bounds[0] and x <= ct_bounds[1]]))
-
-    # TODO: Assert all of the datasets have the same length in time.
-    if os.path.exists(get_fn_thermo()):
-        return
+        
     # If specific thermo file does not exist but data is contained in larger thermo file,
     # save subset of data from larger file.
-    elif glob.glob('%s/thermo*.nc' % namelist.output_directory):
+    if glob.glob('%s/thermo*.nc' % namelist.output_directory):
+        thermo_files = glob.glob('%s/thermo*.nc' % namelist.output_directory)
         for file in thermo_files:
             part = file.split('/')[-1].split('_') # Isolate file name from path
             syr = int(part[-2][0:4]) # Isolate start year from file name
@@ -103,9 +119,9 @@ def gen_thermo():
             # Check if year is in this range, save subset from existing thermo file
             if year in range(syr,eyr):
                 thermo = xr.open_dataset(file)
-                thermo_ss = thermo.sel(time=slice('%s-%02d' % namelist.start_year, namelist.start_month,
-                                                  '%s-%02d' % namelist.end_year, namelist.end_month))
-                thermo_ss.to_netcdf(get_fn_thermo())
+                thermo_ss = thermo.sel(time=slice('%s-%02d' % start_year, start_month,
+                                                  '%s-%02d' % end_year, end_month))
+                thermo_ss.to_netcdf(fn_out)
             
     n_chunks = namelist.n_procs
     chunks = np.array_split(ds_times, np.minimum(n_chunks, np.floor(len(ds_times) / 2)))
@@ -130,5 +146,5 @@ def gen_thermo():
                            coords = dict(lon = ("lon", ds[input.get_lon_key()].data),
                                          lat = ("lat", ds[input.get_lat_key()].data),
                                          time = ("time", ds_times)))
-    ds_thermo.to_netcdf(get_fn_thermo())
-    print('Saved %s' % get_fn_thermo())
+    ds_thermo.to_netcdf(fn_out)
+    print('Saved %s' % fn_out)

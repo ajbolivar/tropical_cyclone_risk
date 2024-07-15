@@ -75,7 +75,7 @@ class BetaAdvectionTrack:
 
     def _load_wnd_stat(self, data_ts):
         if data_ts == 'monthly': 
-            wnd_Mean, wnd_Cov = env_wind.read_env_wnd_fn(self.fn_wnd_stat)
+            wnd_Mean, wnd_Cov = env_wind.read_env_wnd_fn(self.fn_wnd_stat, data_ts)
             self.wnd_Mean_Fxs = [0]*len(wnd_Mean)
             self.wnd_Cov_Fxs = [['' for i in range(len(wnd_Cov))] for j in range(len(wnd_Cov[0]))]
             
