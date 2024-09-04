@@ -5,6 +5,7 @@
 """
 import dask
 import datetime
+import calendar
 import numpy as np
 import os
 import xarray as xr
@@ -23,11 +24,10 @@ Driver function to compute zonal and meridional wind monthly mean and
 covariances, potential intensity, GPI, and saturation deficit.
 """
 def compute_downscaling_inputs(year = 999):
-    data_ts = namelist.data_ts
     print('Computing monthly mean and variance of environmental wind...')
     s = time.time()
-    if namelist.gnu_parallel == True: env_wind.gen_wind_mean_cov(data_ts, year)
-    else: env_wind.gen_wind_mean_cov(data_ts)
+    if namelist.gnu_parallel == True: env_wind.gen_wind_mean_cov(year)
+    else: env_wind.gen_wind_mean_cov()
     e = time.time()
     print('Time Elapsed: %f s' % (e - s))
 
@@ -124,14 +124,26 @@ def fn_tracks_duplicates(fn_trk):
     return fn_trk_out
 
 """
+Converts a seed index into a 6-hourly datetime.
+"""
+def seed_to_datetime(year, time_seed):
+    # Ensure the date starts at the first hour and day of a non-leap year
+    start_date = datetime.datetime(2001, 1, 1, 0)
+    # After getting the appropriate timestep, replace the year
+    seed_derived_date = (start_date + time_seed * (datetime.timedelta(hours = 6))).replace(year=year)
+    return seed_derived_date
+
+"""
 Generates "n_tracks" number of tropical cyclone tracks, in basin
 described by "b" (can be global), in the year.
 """
-def run_tracks(year, n_tracks, b, data_ts):
+def run_tracks(year, n_tracks, b):
     # Load thermodynamic and ocean variables.
-    print(year)
+    if namelist.debug: print(f'Currently working on {year}...')
+        
     if namelist.gnu_parallel == True: fn_th = calc_thermo.get_fn_thermo(year)
     else: fn_th = calc_thermo.get_fn_thermo()
+        
     ds = xr.open_dataset(fn_th)
     dt_year_start = datetime.datetime(year-1, 12, 31)
     dt_year_end = datetime.datetime(year, 12, 31)
@@ -177,13 +189,12 @@ def run_tracks(year, n_tracks, b, data_ts):
         lat_check = seed_info[input.get_genlat_key()].between(b_bounds[1], b_bounds[3])
         seed_info = seed_info[lon_check & lat_check]
         n_tracks = len(seed_info)
-        print(f'AJB: n_tracks == {n_tracks}')
                                   
     # To randomly seed in both space and time, load data for each month in the year.
     T_s = namelist.total_track_time_days * 24 * 60 * 60     # total time to run tracks
     fn_wnd_stat = env_wind.get_env_wnd_fn(year)
     ds_wnd = xr.open_dataset(fn_wnd_stat)
-    if data_ts == 'monthly':
+    if namelist.data_ts == 'monthly':
         cpl_fast = [0] * 12
         m_init_fx = [0] * 12
         n_seeds = np.zeros((len(basin_ids), 12))
@@ -199,24 +210,24 @@ def run_tracks(year, n_tracks, b, data_ts):
             chi_month = np.maximum(np.minimum(np.exp(np.log(chi_month + 1e-3) + namelist.log_chi_fac) + namelist.chi_fac, 5), 1e-5)
             mld_month = mat.interp_2d_grid(mld['lon'], mld['lat'], np.nan_to_num(mld[:, :, i]), lon, lat)
             strat_month = mat.interp_2d_grid(strat['lon'], strat['lat'], np.nan_to_num(strat[:, :, i]), lon, lat)
-            cpl_fast[i] = coupled_fast.Coupled_FAST(fn_wnd_stat, b, ds_dt_month, data_ts,
-                                                    namelist.output_interval_s, T_s)
+            cpl_fast[i] = coupled_fast.Coupled_FAST(fn_wnd_stat, b, ds_dt_month, namelist.output_interval_s, T_s)
             cpl_fast[i].init_fields(lon, lat, chi_month, vpot_month, mld_month, strat_month)
 
-    if data_ts == '6-hourly':
+    if namelist.data_ts == '6-hourly':
         cpl_fast = [0] * 1460
         m_init_fx = [0] * 1460
         n_seeds = np.zeros((len(basin_ids), 1460))
 
-        # Creating array of dates to draw from and removing leap day
+        # Create array of dates to draw from and remove leap day
         start_date = datetime.datetime(year, 1, 1, 0)
         end_date = datetime.datetime(year, 12, 31, 18)
         interval = datetime.timedelta(hours=6)  # 6-hourly time interval
 
         dates = [start_date + i * interval for i in range(int((end_date - start_date) / interval) + 1)
                  if (((start_date + i * interval).month != 2) or (((start_date + i * interval).day) != 29))]
-
+        if namelist.debug: print(f'Initializing thermo variables...')
         for i in range(1460):
+            if namelist.debug: print(f'On timestep {i}...')
             dt_6hr = dates[i]
             month_index = int(dt_6hr.month - 1)
             ds_dt_6hr = input.convert_from_datetime(ds_wnd, [dt_6hr])[0]
@@ -229,8 +240,7 @@ def run_tracks(year, n_tracks, b, data_ts):
 
             mld_month = mat.interp_2d_grid(mld['lon'], mld['lat'], np.nan_to_num(mld[:, :, month_index]), lon, lat)
             strat_month = mat.interp_2d_grid(strat['lon'], strat['lat'], np.nan_to_num(strat[:, :, month_index]), lon, lat)
-            cpl_fast[i] = coupled_fast.Coupled_FAST(fn_wnd_stat, b, ds_dt_6hr, data_ts,
-                                                    namelist.output_interval_s, T_s)
+            cpl_fast[i] = coupled_fast.Coupled_FAST(fn_wnd_stat, b, ds_dt_6hr, namelist.output_interval_s, T_s)
             cpl_fast[i].init_fields(lon, lat, chi_6hr, vpot_6hr, mld_month, strat_month)
 
     # Output vectors.
@@ -249,19 +259,17 @@ def run_tracks(year, n_tracks, b, data_ts):
     tcs_df_list = []
 
     while nt < n_tracks:
-        print(f"Attempting track number = {nt}")
+        if namelist.debug: print(f"Attempting track number = {nt}")
         # Skip seed check for manual seeding
         if namelist.seeding == 'manual':
-            print('manual seeding')
             gen_lon = seed_info[input.get_genlon_key()][nt]
             gen_lat = seed_info[input.get_genlat_key()][nt]
-            gen_t   = pd.to_datetime('2001' + str(seed_info[input.get_month_key()][nt]) +
+            gen_dt   = pd.to_datetime('2001' + str(seed_info[input.get_month_key()][nt]) +
                                      str(seed_info[input.get_day_key()][nt]) +
                                      str(seed_info[input.get_hour_key()][nt]),
                                      format='%Y%m%d%H')
 
-            time_seed = int(((gen_t.dayofyear - 1) * 4) + gen_t.hour/6)
-            print(gen_lon, gen_lat, gen_t, time_seed)
+            time_seed = int(((gen_dt.dayofyear - 1) * 4) + gen_dt.hour/6)
             fast = cpl_fast[time_seed]
 
             # Find basin of genesis location and switch H_bl.
@@ -286,13 +294,17 @@ def run_tracks(year, n_tracks, b, data_ts):
                     gen_lon = np.random.uniform(b_bounds[0], b_bounds[2], 1)[0]
                     gen_lat = np.arcsin(np.random.uniform(y_min, y_max, 1)[0]) * 180 / np.pi
                 
-                if data_ts == 'monthly':
+                if namelist.data_ts == 'monthly':
                     # Randomly seed the month.
                     time_seed = np.random.randint(1, 13)
-                if data_ts == '6-hourly':
+                if namelist.data_ts == '6-hourly':
                     # Randomly seed the 6-hour timestep.
                     time_seed = np.random.randint(1,1461)
-    
+
+                gen_dt = seed_to_datetime(year, time_seed - 1)
+                track_dates = pd.date_range(gen_dt, freq ='D', periods = namelist.total_track_time_days)
+                start_time = track_dates[0]
+                end_time = track_dates[-1]
                 fast = cpl_fast[time_seed - 1]
     
                 # Find basin of genesis location and switch H_bl.
@@ -320,7 +332,16 @@ def run_tracks(year, n_tracks, b, data_ts):
         rh_init = float(m_init_fx[time_seed-1].ev(gen_lon, gen_lat))
         m_init = np.maximum(0, namelist.f_mInit(rh_init))
         fast.h_bl = namelist.atm_bl_depth[basin_ids[basin_idx]]
-        res = fast.gen_track(gen_lon, gen_lat, v_init, m_init, data_ts)
+
+        if namelist.debug: print(f'Beginning track integration...')
+        if namelist.data_ts == '6-hourly':
+            print(chi.time.values)
+            print(track_dates)
+            chi_track = chi.sel(time = slice(start_time, end_time))
+            vpot_track = vpot.sel(time = slice(start_time, end_time))
+            res = fast.gen_track(gen_lon, gen_lat, v_init, m_init, gen_dt, chi_track, vpot_track, lon, lat)
+        elif namelist.data_ts == 'monthly':
+            res = fast.gen_track(gen_lon, gen_lat, v_init, m_init)
 
         is_tc = False
         if res != None:
@@ -349,7 +370,7 @@ def run_tracks(year, n_tracks, b, data_ts):
             # of the time-integrated state (a parameter), we recompute it.
             # TODO: Remove this redudancy by pre-caclulating the env. wind.
             for i in range(len(track_lon)):
-                tc_env_wnds[nt, i, :] = fast._env_winds(track_lon[i], track_lat[i], fast.t_s[i], data_ts)     
+                tc_env_wnds[nt, i, :] = fast._env_winds(track_lon[i], track_lat[i], fast.t_s[i], namelist.data_ts)     
             vmax = tc_wind.axi_to_max_wind(track_lon, track_lat, fast.dt_track,
                                            v_track, tc_env_wnds[nt, 0:n_time, :])
             if np.nanmax(vmax) >= namelist.seed_vmax_threshold_ms:
@@ -376,7 +397,6 @@ Runs the downscaling model in basin "basin_id" according to the
 settings in the namelist.txt file.
 """
 def run_downscaling(basin_id, year = 999):
-    data_ts = namelist.data_ts
     n_tracks = namelist.tracks_per_year   # number of tracks per year
     n_procs = namelist.n_procs
     b = basins.TC_Basin(basin_id)
@@ -400,7 +420,7 @@ def run_downscaling(basin_id, year = 999):
 
     lazy_results = []; f_args = [];
     for yr in range(yearS, yearE+1):
-        lazy_result = dask.delayed(run_tracks)(yr, n_tracks, b, data_ts)
+        lazy_result = dask.delayed(run_tracks)(yr, n_tracks, b)
         f_args.append((yr, n_tracks, b))
         lazy_results.append(lazy_result)
 
@@ -428,10 +448,10 @@ def run_downscaling(basin_id, year = 999):
     yr_trks = np.stack([[x[0]] for x in f_args]).flatten()
     basin_ids = sorted([k for k in namelist.basin_bounds if k != 'GL'])
 
-    if data_ts == "monthly":
+    if namelist.data_ts == "monthly":
         name = "month"
         t = list(range(1,13))
-    if data_ts == "6-hourly":
+    if namelist.data_ts == "6-hourly":
         name = "timestep"
         t = list(range(1,1461))
 

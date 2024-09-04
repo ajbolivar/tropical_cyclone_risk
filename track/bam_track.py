@@ -46,7 +46,7 @@ class BetaAdvectionTrack:
     Class that defines methods to generate synthetic tracks using a simple
     beta-advection model.
     """
-    def __init__(self, fn_wnd_stat, basin, dt_start, data_ts, dt_track = 3600,
+    def __init__(self, fn_wnd_stat, basin, dt_start, dt_track = 3600,
                  total_time = 15*24*60*60):
         self.fn_wnd_stat = fn_wnd_stat
         self.dt_track = dt_track                # numerical time step (seconds)
@@ -67,20 +67,20 @@ class BetaAdvectionTrack:
         for i in range(self.nLvl):
             self.u_Mean_idxs[i] = int(self.var_names.index('ua' + str(p_lvls[i]) + '_Mean'))
             self.v_Mean_idxs[i] = int(self.var_names.index('va' + str(p_lvls[i]) + '_Mean'))          
-        self._load_wnd_stat(data_ts)
+        self._load_wnd_stat()
 
     def _interp_basin_field(self, var):
         lon_b, lat_b, var_b = self.basin.transform_global_field(self.wnd_lon, self.wnd_lat, var)
         return mat.interp2_fx(lon_b, lat_b, np.nan_to_num(var_b))
 
-    def _load_wnd_stat(self, data_ts):
-        if data_ts == 'monthly': 
-            wnd_Mean, wnd_Cov = env_wind.read_env_wnd_fn(self.fn_wnd_stat, data_ts)
+    def _load_wnd_stat(self):
+        if namelist.data_ts == 'monthly': 
+            wnd_Mean, wnd_Cov = env_wind.read_env_wnd_fn(self.fn_wnd_stat)
             self.wnd_Mean_Fxs = [0]*len(wnd_Mean)
             self.wnd_Cov_Fxs = [['' for i in range(len(wnd_Cov))] for j in range(len(wnd_Cov[0]))]
             
-        elif data_ts == '6-hourly': 
-            wnd_Mean = env_wind.read_env_wnd_fn(self.fn_wnd_stat, data_ts)
+        elif namelist.data_ts == '6-hourly': 
+            wnd_Mean = env_wind.read_env_wnd_fn(self.fn_wnd_stat)
 
         ds = xr.open_dataset(self.fn_wnd_stat)
         self.datetime_start = input.convert_to_datetime(ds, np.array([self.dt_start]))
@@ -88,7 +88,7 @@ class BetaAdvectionTrack:
         self.wnd_lat = wnd_Mean[0]['lat']
 
         # Calculating weights is not necessary when using 6-hourly data
-        if data_ts == 'monthly':
+        if namelist.data_ts == 'monthly':
             # Since xarray interpolation is slow, use our own 2-D interpolation.
             # Only create interpolation functions for the lower triangular matrix.
             for i in range(len(wnd_Mean)):
@@ -117,7 +117,7 @@ class BetaAdvectionTrack:
 
     """ Query env_wnd file for nearest 6-hourly winds """
     def query_wnd_nearest(self, clon, clat, ct):
-        wnd_Mean = env_wind.read_env_wnd_fn(self.fn_wnd_stat, data_ts = '6-hourly')
+        wnd_Mean = env_wind.read_env_wnd_fn(self.fn_wnd_stat)
         var_Mean = env_wind.wind_mean_vector_names()
         
         wnds = np.array([wnd_Mean[x].sel(time=ct,lon=clon,lat=clat,method='nearest').item() for x in range(len(var_Mean))])
@@ -129,13 +129,13 @@ class BetaAdvectionTrack:
         return(gen_f(N_series, self.T_Fs, self.t_s, self.nWLvl))
 
     """ Calculate environmental winds at a point and time. """
-    def _env_winds(self, clon, clat, ts, data_ts):
+    def _env_winds(self, clon, clat, ts):
         if np.isnan(clon) or np.isnan(ts):
             return np.zeros(self.nWLvl)
 
         ct = self.datetime_start + datetime.timedelta(seconds = ts)
         
-        if data_ts == 'monthly':
+        if namelist.data_ts == 'monthly':
             wnd_mean, wnd_cov = self.interp_wnd_mean_cov(clon, clat, ct)
             try:
                 wnd_A = np.linalg.cholesky(wnd_cov)
@@ -145,17 +145,17 @@ class BetaAdvectionTrack:
             wnds = wnd_mean + np.matmul(wnd_A, self.Fs_i(ts))
             return wnds
 
-        elif data_ts == '6-hourly':
+        elif namelist.data_ts == '6-hourly':
             wnds = self.query_wnd_nearest(clon, clat, ct)
             return wnds
 
     """ Calculate the translational speeds from the beta advection model """
-    def _step_bam_track(self, clon, clat, ts, steering_coefs, data_ts):
+    def _step_bam_track(self, clon, clat, ts, steering_coefs):
         # Include a hard stop for latitudes above 80 degrees.
         # Ensures that solve_ivp does not go past the domain bounds.
         if np.abs(clat) >= 80:
             return (np.zeros(2), np.zeros(self.nWLvl))
-        wnds = self._env_winds(clon, clat, ts, data_ts)
+        wnds = self._env_winds(clon, clat, ts)
 
         v_bam = np.zeros(2)
         w_lat = np.cos(np.deg2rad(clat))

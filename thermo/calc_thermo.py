@@ -25,6 +25,11 @@ def get_fn_thermo(year = 999):
                                                    namelist.end_year, namelist.end_month)
     return(fn_th)
 
+def running_mean(data, axis, n):
+    kernel = np.ones(n) / n
+    out = np.apply_along_axis(np.convolve, axis=0, arr=data, v=kernel, mode='same')
+    return out
+
 def compute_thermo(dt_start, dt_end):
     ds_sst = input.load_sst(dt_start, dt_end).load()
     ds_psl = input.load_mslp(dt_start, dt_end).load()
@@ -76,6 +81,10 @@ def compute_thermo(dt_start, dt_end):
                     p_midlevel_Pa, hus_midlevel)
         chi[i, :, :] = np.minimum(np.maximum(thermo.sat_deficit(*chi_args), 0), 10)
         rh_mid[i, :, :] = thermo.conv_q_to_rh(ta_midlevel, hus_midlevel, p_midlevel_Pa)
+    
+    vmax = running_mean(vmax, axis = 0, n = 5) 
+    chi = running_mean(chi, axis = 0, n = 5)
+    rh_mid = running_mean(rh_mid, axis = 0, n = 5)
 
     return (vmax, chi, rh_mid)
 
@@ -132,11 +141,18 @@ def gen_thermo(year = 999):
     out = dask.compute(*lazy_results, scheduler = 'processes', num_workers = n_chunks)
 
     # Clean up and process output.
-    # Ensure monthly timestamps have middle-of-the-month days.
-    ds_times = input.convert_from_datetime(ds,
-                  np.array([datetime.datetime(x.year, x.month, 15) for x in
-                           [x for x in input.convert_to_datetime(ds, ds['time'].values)
-                            if x >= ct_bounds[0] and x <= ct_bounds[1]]]))
+    if namelist.data_ts == '6-hourly':
+        ds_times = input.convert_from_datetime(ds,
+                    np.array([datetime.datetime(x.year, x.month, x.day) for x in
+                             [x for x in input.convert_to_datetime(ds, ds['time'].values)
+                             if x >= ct_bounds[0] and x <= ct_bounds[1]]]))
+    elif namelist.data_ts == 'monthly':
+        # Ensure monthly timestamps have middle-of-the-month days.
+        ds_times = input.convert_from_datetime(ds,
+                    np.array([datetime.datetime(x.year, x.month, 15) for x in
+                             [x for x in input.convert_to_datetime(ds, ds['time'].values)
+                             if x >= ct_bounds[0] and x <= ct_bounds[1]]]))
+    
     vmax = np.concatenate([x[0] for x in out], axis = 0)
     chi = np.concatenate([x[1] for x in out], axis = 0)
     rh_mid = np.concatenate([x[2] for x in out], axis = 0)

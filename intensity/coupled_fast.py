@@ -5,6 +5,8 @@ Implementation of FAST (Emanuel, 2017) that is coupled to the track.
 """
 
 import numpy as np
+import xarray as xr
+from datetime import timedelta
 from scipy.integrate import solve_ivp
 from scipy.interpolate import interp1d, RectBivariateSpline
 import warnings
@@ -16,8 +18,8 @@ from track import bam_track, env_wind
 from util import constants
 
 class Coupled_FAST(bam_track.BetaAdvectionTrack):
-    def __init__(self, fn_wnd_stat, basin, dt_start, data_ts, dt_s, total_time_s):
-        super().__init__(fn_wnd_stat, basin, dt_start, data_ts, dt_s, total_time_s)
+    def __init__(self, fn_wnd_stat, basin, dt_start, dt_s, total_time_s):
+        super().__init__(fn_wnd_stat, basin, dt_start, dt_s, total_time_s)
 
         """ FAST Constants """
         self.Ck = namelist.Ck                       # surface enthalpy coefficient
@@ -50,12 +52,30 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
     def _get_current_strat(self, clon, clat):
         return self.f_strat.ev(clon, clat).flatten()[0]
 
-    """ Return the current potential intensity at a position"""
-    def _get_current_vpot(self, clon, clat):
+    """ Return the current potential intensity at a position and time"""
+    def _get_current_vpot(self, clon, clat, new_dt):
         if self._get_over_land(clon, clat):
-            return(0)
+            return 0
         else:
-            return self.f_vpot.ev(clon, clat).flatten()[0]
+            try:
+                # Convert `new_dt` to a compatible format (if it's not already a datetime object)
+                if not isinstance(new_dt, pd.Timestamp):
+                    new_dt = pd.to_datetime(new_dt)
+    
+                # Check if f_vpot is a list or a single RectBivariateSpline
+                if isinstance(self.f_vpot, list):
+                    # Calculate the time differences and find the nearest index
+                    time_diffs = [abs((new_dt - pd.to_datetime(str(time.values))).total_seconds()) for time in self.times]
+                    nearest_idx = time_diffs.index(min(time_diffs))
+                    # Return the interpolated value from the correct RectBivariateSpline
+                    return self.f_vpot[nearest_idx].ev(clon, clat).flatten()[0]
+                else:
+                    return self.f_vpot.ev(clon, clat).flatten()[0]
+                    
+            except Exception as e:
+                print(f"Error: {e}")
+                return None
+
 
     """ Calculate, alpha (Equation 4), the ocean feedback parameter.
     Ocean mixing is turned off when the mixed layer depth equals or
@@ -122,12 +142,29 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
         return np.linalg.norm(self._calc_env_wnd_to_shr(env_wnds))
 
     """ Calculate the normalized mid-level saturation entropy deficit."""
-    def _calc_chi(self, clon, clat):
-        return self.f_chi.ev(clon, clat).flatten()[0]
+    def _calc_chi(self, clon, clat, new_dt):
+        try:
+            # Convert `new_dt` to a compatible format (if it's not already a datetime object)
+            if not isinstance(new_dt, pd.Timestamp):
+                new_dt = pd.to_datetime(new_dt)
+
+            # Check if f_chi is a list or a single RectBivariateSpline
+            if isinstance(self.f_chi, list):
+                # Calculate the time differences and find the nearest index
+                time_diffs = [abs((new_dt - pd.to_datetime(str(time.values))).total_seconds()) for time in self.times]
+                nearest_idx = time_diffs.index(min(time_diffs))
+                # Return the interpolated value from the correct RectBivariateSpline
+                return self.f_chi[nearest_idx].ev(clon, clat).flatten()[0]
+            else:
+                return self.f_chi.ev(clon, clat).flatten()[0]
+                
+        except Exception as e:
+            print(f"Error: {e}")
+            return None
 
     """ Calculate the ventilation. """
-    def _calc_venti(self, t, clon, clat, env_wnds):
-        chi = self._calc_chi(clon, clat)
+    def _calc_venti(self, t, clon, clat, env_wnds, new_dt):
+        chi = self._calc_chi(clon, clat, new_dt)
         return (self._calc_S(env_wnds) * chi)
 
     """ Define the first ODE in the coupled set, Equation 2.
@@ -138,8 +175,8 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
     gamma must vary with time as well (Equation 7).
     Potential intensity (v_p) also varies with time.
     """
-    def _dvdt(self, clon, clat, v, m, v_trans, env_wnds, t):
-        v_pot = self._get_current_vpot(clon, clat)
+    def _dvdt(self, clon, clat, v, m, v_trans, env_wnds, t, new_dt):
+        v_pot = self._get_current_vpot(clon, clat, t, new_dt)
         alpha = self._calc_alpha(clon, clat, v_trans, v)
         gamma = self._calc_gamma(alpha)
         beta = self._calc_beta()
@@ -172,8 +209,8 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
     kappa (Equation 9).
     However, environmental wind shear (S) still varies with time.
     """
-    def _dmdt(self,  clon, clat, v, m, env_wnds, t):
-        venti = self._calc_venti(t, clon, clat, env_wnds)
+    def _dmdt(self, clon, clat, v, m, env_wnds, t, new_dt):
+        venti = self._calc_venti(t, clon, clat, env_wnds, new_dt)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=RuntimeWarning)
             dmdt = 0.5 * self.Ck / self.h_bl * ((1 - m) * v - venti * m)
@@ -193,14 +230,21 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
 
     """ Time-derivative of the state vector, y.
     y[0] is longitude, y[1] is latitude, y[2] is v, and y[3] is m."""
-    def dydt(self, t, y, data_ts):
+    def dydt(self, t, y, gen_dt):
+        if namelist.debug:
+            print(f'Current timestep t = {t}: lon = {y[0]}, lat = {y[1]}, v = {y[2]}, m = {y[3]}')
+            
+        new_dt = gen_dt + datetime.timedelta(seconds = t)
+        if new_dt.strftime('%m%d') == '0229': 
+            new_dt = new_dt + datetime.timedelta(day = 1)
+            
         steering_coefs = self._calc_steering_coefs(y[2])
-        v_bam, env_wnds = self._step_bam_track(y[0], y[1], t, steering_coefs, data_ts)
+        v_bam, env_wnds = self._step_bam_track(y[0], y[1], t, steering_coefs)
         dLondt = v_bam[0] / constants.earth_R * 180. / np.pi / (np.cos(y[1] * np.pi / 180.))
         dLatdt = v_bam[1] / constants.earth_R * 180. / np.pi
 
-        dvdt = self._dvdt(*y, v_bam, env_wnds, t)
-        dmdt = self._dmdt(*y, env_wnds, t)
+        dvdt = self._dvdt(*y, v_bam, env_wnds, t, new_dt)
+        dmdt = self._dmdt(*y, env_wnds, t, new_dt)
         if self.debug:
             return(np.array([0, 0, dvdt, dmdt]))
         else:
@@ -224,9 +268,32 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
         _, _, strat_b = self.basin.transform_global_field(lon, lat, strat)
         self.f_strat = RectBivariateSpline(lon_b, lat_b, strat_b.T, kx=1, ky=1)
 
+    """
+    lon is a 1-D array describing the longitude of the fields: [lon]
+    lat is a 1-D array describing the latitude of the fields: [lat]
+    chi is a 3-D matrix of chi in space and time: [lat, lon, time]
+    vpot is a 3-D matrix of potential intensity in space and time: [lat, lon, time]
+    """
+    def reinit_fields(self, lon, lat, chi, vpot):
+        f_chi = []
+        f_vpot = []
+        self.times = chi.time
+        print('Reinitializing fields...')
+        for i in range(0,len(chi.time)):
+            print(chi.time[i])
+            lon_b, lat_b, chi_b = self.basin.transform_global_field(lon, lat, chi.isel(time = i))
+            _, _, vpot_b = self.basin.transform_global_field(lon, lat, vpot.isel(time = i))
+            f_chi.append(RectBivariateSpline(lon_b, lat_b, chi_b.T, kx=1, ky=1))
+            f_vpot.append(RectBivariateSpline(lon_b, lat_b, vpot_b.T, kx=1, ky=1))
+
+        self.f_chi = f_chi
+        self.f_vpot = f_vpot
+
     """ Generate a track with an initial position of (clon, clat),
         an initial intensity of v, and initial inner core moisture m """
-    def gen_track(self, clon, clat, v, m = None, data_ts = ''):
+    def gen_track(self, clon, clat, v, m = None, gen_dt = None, chi = None, vpot = None, lon = None, lat = None):
+        if namelist.debug:
+            print('Attempting track.')
         # Make sure that tracks are sufficiently randomized.
         bam_track.random_seed()
 
@@ -234,16 +301,19 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
         self.Fs = self.gen_synthetic_f()
         self.Fs_i = interp1d(self.t_s, self.Fs, axis = 1)
 
+        # If new chi/vpot supplied, reinitialize those variables as time arrays
+        self.reinit_fields(lon, lat, chi, vpot)
         # If the ventilation index is above some threshold, do not integrate.
-        S = self._calc_S(self._env_winds(clon, clat, 0, data_ts))
-        vpot = self._get_current_vpot(clon, clat)
-        chi = self._calc_chi(clon, clat)
+        S = self._calc_S(self._env_winds(clon, clat, 0))
+        vpot = self._get_current_vpot(clon, clat, gen_dt)
+        chi = self._calc_chi(clon, clat, gen_dt)
+
         if vpot > 0:
             vent_index = S * chi / vpot
             if vent_index >= 1:
                 return None
 
-        def tc_dissipates(t, y, data_ts):
+        def tc_dissipates(t, y):
             if not self.basin.in_basin(y[0], y[1], 1):
                 # Do not let the track wander outside the basin.
                 return 0
@@ -263,6 +333,6 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
             m_init = m
 
         res = solve_ivp(fun = self.dydt, t_span = (0, self.total_time), y0 = np.asarray([clon, clat, v, m_init]),
-                        args = (data_ts,), t_eval = np.linspace(0, self.total_time, self.total_steps),
+                        args = (gen_dt,), t_eval = np.linspace(0, self.total_time, self.total_steps),
                         events = tc_dissipates, max_step = 86400)
         return res

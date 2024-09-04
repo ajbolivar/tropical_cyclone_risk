@@ -5,9 +5,10 @@ Namelist file that serves as the configuration file for the TC-risk model.
 """
 ########################## File System Parameters ###########################
 src_directory = os.path.dirname(os.path.abspath(__file__))
-base_directory = '/glade/derecho/scratch/abolivar/tc_risk/input/ERA5/standard'
-output_directory = '/glade/derecho/scratch/abolivar/tc_risk/output/ERA5/parallel_test'
-exp_name = 'test'
+base_directory = '/glade/derecho/scratch/abolivar/tc_risk/input/ERA5/chi_test_coarse/1deg'
+output_directory = '/glade/derecho/scratch/abolivar/tc_risk/output/ERA5/sub_monthly_thermo'
+exp_name = 'test1'
+debug = True
 # For now, we support either 'GCM' or 'ERA5'. Different file types and variable
 # names can be added by modifying the "input.py" file and adding the appropriate
 # variable key words in the structure var_keys.
@@ -23,13 +24,13 @@ exp_prefix = 'era5'
 # 'v' is meridional wind (daily)
 var_keys = {'ERA5': {'sst': 'SSTK', 'mslp': 'MSL', 'temp': 'T',
                      'sp_hum': 'Q', 'u': 'U', 'v': 'V',
-                     'lvl': 'level', 'lon': 'longitude', 'lat': 'latitude'},
+                     'lvl': 'level', 'lon': 'lon', 'lat': 'lat'},
             'GCM': {'sst': 'tas', 'mslp': 'psl', 'temp': 'ta',
                     'sp_hum': 'hus', 'u': 'ua', 'v': 'va',
                     'lvl': 'plev', 'lon': 'lon', 'lat': 'lat'}}
 
 ########################### Data Input Parameters ###########################
-data_ts = 'monthly'     # timestep of input data, 'monthly' or '6-hourly'
+data_ts = '6-hourly'     # timestep of input data, 'monthly' or '6-hourly'
 seeding = 'random'       # method of storm seeding, 'random' or 'manual'
 # file containing genesis points (lon/lat/date/time)
 gen_points = '/glade/work/abolivar/Pyclogenesis_data/trajectories_ERA5_2005sample.csv'
@@ -47,9 +48,9 @@ gnu_parallel = True    # when True, uses GNU parallel for parallelization
 """
 These parameters configure the dates for the TC-risk model.
 """
-start_year = 1979
+start_year = 2005
 start_month = 1                       # month of start_year to start downscaling
-end_year = 2014
+end_year = 2005
 end_month = 12                        # month of end_year to stop downscaling
 
 """
@@ -57,7 +58,7 @@ These parameters configure the output.
 """
 output_interval_s = 3600              # output interval of tracks, seconds (does not change time integration)
 total_track_time_days = 15            # total time to integrate tracks, days
-tracks_per_year = 100                  # total number of tracks to simulate per year (will be overwritten if seeding is set to 'manual')
+tracks_per_year = 1                  # total number of tracks to simulate per year (will be overwritten if seeding is set to 'manual')
 
 """
 These parameters configure thermodynamics and thermodynamic constants.
