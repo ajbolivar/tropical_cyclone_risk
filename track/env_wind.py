@@ -73,7 +73,7 @@ def read_env_wnd_fn(fn_wnd_stat, dt_s = None, dt_e = None):
     wnd_Mean = [ds[x] for x in var_Mean]
     wnd_Cov = [['' for i in range(len(var_Mean))] for j in range(len(var_Mean))]
 
-    if namelist.data_ts == 'monthly':
+    if namelist.wind_ts == 'monthly':
         for i in range(len(var_Mean)):
             for j in range(len(var_Mean)):
                 if j > i:
@@ -83,7 +83,7 @@ def read_env_wnd_fn(fn_wnd_stat, dt_s = None, dt_e = None):
                     
         return (wnd_Mean, wnd_Cov)
 
-    elif namelist.data_ts == '6-hourly':
+    elif namelist.wind_ts == '6-hourly':
         return wnd_Mean
 
 
@@ -93,7 +93,7 @@ tropical cyclones.
 """
 def gen_wind_mean_cov(year=999):
     fn_out = get_env_wnd_fn(year)
-    if (os.path.exists(fn_out)) or (namelist.data_ts == '6-hourly'):
+    if (os.path.exists(fn_out)) or (namelist.wind_ts == '6-hourly'):
         print(f"File {fn_out} exists. Skipping...")
         return
 
@@ -114,8 +114,8 @@ def gen_wind_mean_cov(year=999):
 
     var_Mean = wind_mean_vector_names()
     
-    if namelist.data_ts == 'monthly': var_Var = sum([[x for x in y if len(x) > 0] for y in wind_cov_matrix_names()], [])
-    elif namelist.data_ts == '6-hourly': var_Var = []
+    if namelist.wind_ts == 'monthly': var_Var = sum([[x for x in y if len(x) > 0] for y in wind_cov_matrix_names()], [])
+    elif namelist.wind_ts == '6-hourly': var_Var = []
         
     var_names = var_Mean + var_Var
     var_dict = dict()
@@ -169,7 +169,7 @@ def wnd_stat_wrapper(args):
         out[i] = calc_wnd_stat(ua, va, t_months[i])
 
     # Save the results using an intermediate file.
-    if namelist.data_ts == 'monthly':
+    if namelist.wind_ts == 'monthly':
         da_wnd = xr.DataArray(data = xr.concat(out, dim = "time").data,
                               dims = ['time', 'stat', 'lat', 'lon'],
                               coords = dict(lon = ("lon", ds_ua[input.get_lon_key()].data),
@@ -181,7 +181,7 @@ def wnd_stat_wrapper(args):
                                                          t_months[-1].year, t_months[-1].month)
         ds_wnd.to_netcdf(fn_ds_wnd)
 
-    if namelist.data_ts == '6-hourly':
+    if namelist.wind_ts == '6-hourly':
         da_wnd = xr.DataArray(data = xr.concat(out, dim = "time").transpose("time","stat","lat","lon").data,
                               dims = ['time', 'stat', 'lat', 'lon'],
                               coords = dict(lon = ("lon", ds_ua[input.get_lon_key()].data),
@@ -239,7 +239,7 @@ def calc_wnd_stat(ua, va, dt):
 
     month_mean_wnds = [0] * len(month_wnds)
     
-    if namelist.data_ts == 'monthly':
+    if namelist.wind_ts == 'monthly':
         month_var_wnds = [[np.empty(0) for i in range(len(month_wnds))] for j in range(len(month_wnds))]
         for i in range(len(month_wnds)):
             month_mean_wnds[i] = month_wnds[i].mean(dim = t_unit)
@@ -262,7 +262,7 @@ def calc_wnd_stat(ua, va, dt):
                     lon=(ua[input.get_lon_key()].values),
                     lat=(ua[input.get_lat_key()].values)))
 
-    elif namelist.data_ts == '6-hourly':
+    elif namelist.wind_ts == '6-hourly':
         wnd_stats = xr.concat(month_wnds,dim="stat").rename({"latitude": "lat", "longitude": "lon"}).drop_vars('level')
 
     return wnd_stats

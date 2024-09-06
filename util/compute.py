@@ -194,7 +194,7 @@ def run_tracks(year, n_tracks, b):
     T_s = namelist.total_track_time_days * 24 * 60 * 60     # total time to run tracks
     fn_wnd_stat = env_wind.get_env_wnd_fn(year)
     ds_wnd = xr.open_dataset(fn_wnd_stat)
-    if namelist.data_ts == 'monthly':
+    if namelist.wind_ts == 'monthly':
         cpl_fast = [0] * 12
         m_init_fx = [0] * 12
         n_seeds = np.zeros((len(basin_ids), 12))
@@ -213,7 +213,7 @@ def run_tracks(year, n_tracks, b):
             cpl_fast[i] = coupled_fast.Coupled_FAST(fn_wnd_stat, b, ds_dt_month, namelist.output_interval_s, T_s)
             cpl_fast[i].init_fields(lon, lat, chi_month, vpot_month, mld_month, strat_month)
 
-    if namelist.data_ts == '6-hourly':
+    if namelist.wind_ts == '6-hourly':
         cpl_fast = [0] * 1460
         m_init_fx = [0] * 1460
         n_seeds = np.zeros((len(basin_ids), 1460))
@@ -227,7 +227,6 @@ def run_tracks(year, n_tracks, b):
                  if (((start_date + i * interval).month != 2) or (((start_date + i * interval).day) != 29))]
         if namelist.debug: print(f'Initializing thermo variables...')
         for i in range(1460):
-            if namelist.debug: print(f'On timestep {i}...')
             dt_6hr = dates[i]
             month_index = int(dt_6hr.month - 1)
             ds_dt_6hr = input.convert_from_datetime(ds_wnd, [dt_6hr])[0]
@@ -294,10 +293,10 @@ def run_tracks(year, n_tracks, b):
                     gen_lon = np.random.uniform(b_bounds[0], b_bounds[2], 1)[0]
                     gen_lat = np.arcsin(np.random.uniform(y_min, y_max, 1)[0]) * 180 / np.pi
                 
-                if namelist.data_ts == 'monthly':
+                if namelist.wind_ts == 'monthly':
                     # Randomly seed the month.
                     time_seed = np.random.randint(1, 13)
-                if namelist.data_ts == '6-hourly':
+                if namelist.wind_ts == '6-hourly':
                     # Randomly seed the 6-hour timestep.
                     time_seed = np.random.randint(1,1461)
 
@@ -315,7 +314,7 @@ def run_tracks(year, n_tracks, b):
     
                 # Discard seeds with increasing probability equatorwards.
                 # If PI is less than 35 m/s, do not integrate, but treat as a seed.
-                pi_gen = float(fast.f_vpot.ev(gen_lon, gen_lat))
+                pi_gen = float(fast.f_vpot_init.ev(gen_lon, gen_lat))   
                 lat_vort_power = namelist.lat_vort_power[basin_ids[basin_idx]]
                 prob_lowlat = np.power(np.minimum(np.maximum((np.abs(gen_lat) - namelist.lat_vort_fac) / 12.0, 0), 1), lat_vort_power)
                 rand_lowlat = np.random.uniform(0, 1, 1)[0]
@@ -334,13 +333,11 @@ def run_tracks(year, n_tracks, b):
         fast.h_bl = namelist.atm_bl_depth[basin_ids[basin_idx]]
 
         if namelist.debug: print(f'Beginning track integration...')
-        if namelist.data_ts == '6-hourly':
-            print(chi.time.values)
-            print(track_dates)
+        if namelist.thermo_ts == '6-hourly':
             chi_track = chi.sel(time = slice(start_time, end_time))
             vpot_track = vpot.sel(time = slice(start_time, end_time))
             res = fast.gen_track(gen_lon, gen_lat, v_init, m_init, gen_dt, chi_track, vpot_track, lon, lat)
-        elif namelist.data_ts == 'monthly':
+        elif namelist.thermo_ts == 'monthly':
             res = fast.gen_track(gen_lon, gen_lat, v_init, m_init)
 
         is_tc = False
@@ -370,7 +367,7 @@ def run_tracks(year, n_tracks, b):
             # of the time-integrated state (a parameter), we recompute it.
             # TODO: Remove this redudancy by pre-caclulating the env. wind.
             for i in range(len(track_lon)):
-                tc_env_wnds[nt, i, :] = fast._env_winds(track_lon[i], track_lat[i], fast.t_s[i], namelist.data_ts)     
+                tc_env_wnds[nt, i, :] = fast._env_winds(track_lon[i], track_lat[i], fast.t_s[i])     
             vmax = tc_wind.axi_to_max_wind(track_lon, track_lat, fast.dt_track,
                                            v_track, tc_env_wnds[nt, 0:n_time, :])
             if np.nanmax(vmax) >= namelist.seed_vmax_threshold_ms:
@@ -407,8 +404,8 @@ def run_downscaling(basin_id, year = 999):
         yearS = year
         yearE = year
     
-    if (namelist.seeding == 'manual') & (namelist.data_ts == 'monthly'):
-        print('Error: manual seeding only supported for 6-hourly data!')
+    if (namelist.seeding == 'manual') & (namelist.wind_ts == 'monthly'):
+        print('Error: manual seeding only supported for 6-hourly wind data!')
         return
 
     if namelist.gnu_parallel == True: fn_trk_out = fn_tracks_duplicates(get_fn_tracks(b, year))
@@ -448,10 +445,10 @@ def run_downscaling(basin_id, year = 999):
     yr_trks = np.stack([[x[0]] for x in f_args]).flatten()
     basin_ids = sorted([k for k in namelist.basin_bounds if k != 'GL'])
 
-    if namelist.data_ts == "monthly":
+    if namelist.wind_ts == "monthly":
         name = "month"
         t = list(range(1,13))
-    if namelist.data_ts == "6-hourly":
+    if namelist.wind_ts == "6-hourly":
         name = "timestep"
         t = list(range(1,1461))
 

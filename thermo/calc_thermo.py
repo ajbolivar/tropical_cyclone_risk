@@ -141,12 +141,12 @@ def gen_thermo(year = 999):
     out = dask.compute(*lazy_results, scheduler = 'processes', num_workers = n_chunks)
 
     # Clean up and process output.
-    if namelist.data_ts == '6-hourly':
+    if namelist.thermo_ts == 'sub-monthly':
         ds_times = input.convert_from_datetime(ds,
                     np.array([datetime.datetime(x.year, x.month, x.day) for x in
                              [x for x in input.convert_to_datetime(ds, ds['time'].values)
                              if x >= ct_bounds[0] and x <= ct_bounds[1]]]))
-    elif namelist.data_ts == 'monthly':
+    elif namelist.thermo_ts == 'monthly':
         # Ensure monthly timestamps have middle-of-the-month days.
         ds_times = input.convert_from_datetime(ds,
                     np.array([datetime.datetime(x.year, x.month, 15) for x in

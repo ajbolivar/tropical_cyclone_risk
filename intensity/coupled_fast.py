@@ -5,6 +5,7 @@ Implementation of FAST (Emanuel, 2017) that is coupled to the track.
 """
 
 import numpy as np
+import pandas as pd
 import xarray as xr
 from datetime import timedelta
 from scipy.integrate import solve_ivp
@@ -58,12 +59,12 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
             return 0
         else:
             try:
-                # Convert `new_dt` to a compatible format (if it's not already a datetime object)
-                if not isinstance(new_dt, pd.Timestamp):
-                    new_dt = pd.to_datetime(new_dt)
-    
                 # Check if f_vpot is a list or a single RectBivariateSpline
                 if isinstance(self.f_vpot, list):
+                    # Convert `new_dt` to a compatible format (if it's not already a datetime object)
+                    if not isinstance(new_dt, pd.Timestamp):
+                    new_dt = pd.to_datetime(new_dt)
+                    
                     # Calculate the time differences and find the nearest index
                     time_diffs = [abs((new_dt - pd.to_datetime(str(time.values))).total_seconds()) for time in self.times]
                     nearest_idx = time_diffs.index(min(time_diffs))
@@ -82,10 +83,10 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
     exceeds the local ocean depth (alpha = 1), or when the hurricane
     is over land.
     """
-    def _calc_alpha(self, clon, clat, v_trans, v):
+    def _calc_alpha(self, clon, clat, v_trans, v, new_dt):
         h_m = self._get_current_mixed(clon, clat)
         t_strat = self._get_current_strat(clon, clat)
-        v_pot = self._get_current_vpot(clon, clat)
+        v_pot = self._get_current_vpot(clon, clat, new_dt)
         u_T = np.linalg.norm(v_trans)
         bathymetry = self._get_current_bathymetry(clon, clat)
 
@@ -144,12 +145,11 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
     """ Calculate the normalized mid-level saturation entropy deficit."""
     def _calc_chi(self, clon, clat, new_dt):
         try:
-            # Convert `new_dt` to a compatible format (if it's not already a datetime object)
-            if not isinstance(new_dt, pd.Timestamp):
-                new_dt = pd.to_datetime(new_dt)
-
             # Check if f_chi is a list or a single RectBivariateSpline
             if isinstance(self.f_chi, list):
+                # Convert `new_dt` to a compatible format (if it's not already a datetime object)
+                if not isinstance(new_dt, pd.Timestamp):
+                new_dt = pd.to_datetime(new_dt)
                 # Calculate the time differences and find the nearest index
                 time_diffs = [abs((new_dt - pd.to_datetime(str(time.values))).total_seconds()) for time in self.times]
                 nearest_idx = time_diffs.index(min(time_diffs))
@@ -176,8 +176,8 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
     Potential intensity (v_p) also varies with time.
     """
     def _dvdt(self, clon, clat, v, m, v_trans, env_wnds, t, new_dt):
-        v_pot = self._get_current_vpot(clon, clat, t, new_dt)
-        alpha = self._calc_alpha(clon, clat, v_trans, v)
+        v_pot = self._get_current_vpot(clon, clat, new_dt)
+        alpha = self._calc_alpha(clon, clat, v_trans, v, new_dt)
         gamma = self._calc_gamma(alpha)
         beta = self._calc_beta()
         with warnings.catch_warnings():
@@ -230,13 +230,16 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
 
     """ Time-derivative of the state vector, y.
     y[0] is longitude, y[1] is latitude, y[2] is v, and y[3] is m."""
-    def dydt(self, t, y, gen_dt):
+    def dydt(self, t, y):
         if namelist.debug:
             print(f'Current timestep t = {t}: lon = {y[0]}, lat = {y[1]}, v = {y[2]}, m = {y[3]}')
             
-        new_dt = gen_dt + datetime.timedelta(seconds = t)
-        if new_dt.strftime('%m%d') == '0229': 
-            new_dt = new_dt + datetime.timedelta(day = 1)
+        if self.gen_dt is not None:
+            new_dt = self.gen_dt + timedelta(seconds = t)
+            if new_dt.strftime('%m%d') == '0229': 
+                new_dt = new_dt + timedelta(day = 1)
+        else:
+            new_dt = None
             
         steering_coefs = self._calc_steering_coefs(y[2])
         v_bam, env_wnds = self._step_bam_track(y[0], y[1], t, steering_coefs)
@@ -268,6 +271,9 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
         _, _, strat_b = self.basin.transform_global_field(lon, lat, strat)
         self.f_strat = RectBivariateSpline(lon_b, lat_b, strat_b.T, kx=1, ky=1)
 
+        # Save initial vpot as a separate variable in case it is reinialized later
+        self.f_vpot_init = self.f_vpot
+
     """
     lon is a 1-D array describing the longitude of the fields: [lon]
     lat is a 1-D array describing the latitude of the fields: [lat]
@@ -296,17 +302,18 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
             print('Attempting track.')
         # Make sure that tracks are sufficiently randomized.
         bam_track.random_seed()
-
+        self.gen_dt = gen_dt
         # Create the weights for the beta-advection model (across time).
         self.Fs = self.gen_synthetic_f()
         self.Fs_i = interp1d(self.t_s, self.Fs, axis = 1)
 
-        # If new chi/vpot supplied, reinitialize those variables as time arrays
-        self.reinit_fields(lon, lat, chi, vpot)
+        # If sub-monthly chi/vpot supplied, reinitialize those variables as time arrays
+        if namelist.thermo_ts:
+            self.reinit_fields(lon, lat, chi, vpot)
         # If the ventilation index is above some threshold, do not integrate.
         S = self._calc_S(self._env_winds(clon, clat, 0))
-        vpot = self._get_current_vpot(clon, clat, gen_dt)
-        chi = self._calc_chi(clon, clat, gen_dt)
+        vpot = self._get_current_vpot(clon, clat, self.gen_dt)
+        chi = self._calc_chi(clon, clat, self.gen_dt)
 
         if vpot > 0:
             vent_index = S * chi / vpot
@@ -333,6 +340,6 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
             m_init = m
 
         res = solve_ivp(fun = self.dydt, t_span = (0, self.total_time), y0 = np.asarray([clon, clat, v, m_init]),
-                        args = (gen_dt,), t_eval = np.linspace(0, self.total_time, self.total_steps),
+                        t_eval = np.linspace(0, self.total_time, self.total_steps),
                         events = tc_dissipates, max_step = 86400)
         return res

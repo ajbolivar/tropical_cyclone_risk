@@ -74,12 +74,12 @@ class BetaAdvectionTrack:
         return mat.interp2_fx(lon_b, lat_b, np.nan_to_num(var_b))
 
     def _load_wnd_stat(self):
-        if namelist.data_ts == 'monthly': 
+        if namelist.wind_ts == 'monthly': 
             wnd_Mean, wnd_Cov = env_wind.read_env_wnd_fn(self.fn_wnd_stat)
             self.wnd_Mean_Fxs = [0]*len(wnd_Mean)
             self.wnd_Cov_Fxs = [['' for i in range(len(wnd_Cov))] for j in range(len(wnd_Cov[0]))]
             
-        elif namelist.data_ts == '6-hourly': 
+        elif namelist.wind_ts == '6-hourly': 
             wnd_Mean = env_wind.read_env_wnd_fn(self.fn_wnd_stat)
 
         ds = xr.open_dataset(self.fn_wnd_stat)
@@ -88,7 +88,7 @@ class BetaAdvectionTrack:
         self.wnd_lat = wnd_Mean[0]['lat']
 
         # Calculating weights is not necessary when using 6-hourly data
-        if namelist.data_ts == 'monthly':
+        if namelist.wind_ts == 'monthly':
             # Since xarray interpolation is slow, use our own 2-D interpolation.
             # Only create interpolation functions for the lower triangular matrix.
             for i in range(len(wnd_Mean)):
@@ -135,7 +135,7 @@ class BetaAdvectionTrack:
 
         ct = self.datetime_start + datetime.timedelta(seconds = ts)
         
-        if namelist.data_ts == 'monthly':
+        if namelist.wind_ts == 'monthly':
             wnd_mean, wnd_cov = self.interp_wnd_mean_cov(clon, clat, ct)
             try:
                 wnd_A = np.linalg.cholesky(wnd_cov)
@@ -145,7 +145,7 @@ class BetaAdvectionTrack:
             wnds = wnd_mean + np.matmul(wnd_A, self.Fs_i(ts))
             return wnds
 
-        elif namelist.data_ts == '6-hourly':
+        elif namelist.wind_ts == '6-hourly':
             wnds = self.query_wnd_nearest(clon, clat, ct)
             return wnds
 
