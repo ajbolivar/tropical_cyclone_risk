@@ -112,16 +112,34 @@ def get_fn_tracks(b, year=999):
     return(fn_trk)
 
 """
-Adds a number to the end of fn_trk if the file exists.
+Returns the name of the file containing spatial seed information.
+"""
+def get_fn_seeds(b, year):
+    if namelist.gnu_parallel == True:
+        fn_args = (namelist.output_directory, namelist.exp_name,
+                   b.basin_id, namelist.exp_prefix, year, 1,
+                   year, 12)
+        fn_sd = '%s/%s/seeds_%s_%s_%d%02d_%d%02d.nc' % fn_args
+
+    else:
+        fn_args = (namelist.output_directory, namelist.exp_name,
+                   b.basin_id, namelist.exp_prefix,
+                   namelist.start_year, namelist.start_month,
+                   namelist.end_year, namelist.end_month)
+        fn_sd = '%s/%s/seeds_%s_%s_%d%02d_%d%02d.nc' % fn_args
+    return(fn_sd)
+
+"""
+Adds a number to the end of fn_trk or fn_sd if the file exists.
 Used when running multiple simulations under the same configuration.
 """
-def fn_tracks_duplicates(fn_trk):
+def fn_duplicates(fn):
     f_int = 0
-    fn_trk_out = fn_trk
-    while os.path.exists(fn_trk_out):
-        fn_trk_out = fn_trk.rstrip('.nc') + '_e%d.nc' % f_int
+    fn_out = fn_trk
+    while os.path.exists(fn_out):
+        fn_out = fn.rstrip('.nc') + '_e%d.nc' % f_int
         f_int += 1
-    return fn_trk_out
+    return fn_out
 
 """
 Converts a seed index into a 6-hourly datetime.
@@ -255,7 +273,6 @@ def run_tracks(year, n_tracks, b):
     tc_basin = np.full(n_tracks, "", dtype = 'U2')
     
     seeds_df_list = []
-    tcs_df_list = []
 
     while nt < n_tracks:
         if namelist.debug: print(f"Attempting track number = {nt}")
@@ -318,8 +335,6 @@ def run_tracks(year, n_tracks, b):
                 lat_vort_power = namelist.lat_vort_power[basin_ids[basin_idx]]
                 prob_lowlat = np.power(np.minimum(np.maximum((np.abs(gen_lat) - namelist.lat_vort_fac) / 12.0, 0), 1), lat_vort_power)
                 rand_lowlat = np.random.uniform(0, 1, 1)[0]
-                seed_df = pd.DataFrame([[gen_lat,gen_lon,time_seed,year]],columns=['lat','lon','month','year'])
-                seeds_df_list.append(seed_df)
                 if (np.nanmax(basin_val) > 1e-3) and (rand_lowlat < prob_lowlat):
                     n_seeds[basin_idx, time_seed-1] += 1
                     if (pi_gen > 35):
@@ -376,18 +391,14 @@ def run_tracks(year, n_tracks, b):
                 tc_basin[nt] = basin_ids[basin_idx]
                 nt += 1
 
-        tcs_df = pd.DataFrame([[gen_lat,gen_lon,time_seed,year]],columns=['lat','lon','month','year'])
-        tcs_df_list.append(tcs_df)
+        seeds_df = pd.DataFrame([[gen_lat,gen_lon,time_seed,year]],columns=['lat','lon','month','year'])
+        seeds_df_list.append(seeds_df)
 
     # If no spatial seed info retained, create empty DataFrame
     if not seeds_df_list: seed_tries = pd.DataFrame(columns=['lat','lon','month','year'])
     else: seed_tries = pd.concat(seeds_df_list)
-    # This shouldn't trigger, but just in case.
-    # If no spatial TC attempt info retained, create empty DataFrame
-    if not tcs_df_list: tc_tries = pd.DataFrame(columns=['lat','lon','month','year'])
-    else: tc_tries = pd.concat(tcs_df_list)
 
-    return((tc_lon, tc_lat, tc_v, tc_m, tc_vmax, tc_env_wnds, tc_month, tc_basin, n_seeds, seed_tries, tc_tries))
+    return((tc_lon, tc_lat, tc_v, tc_m, tc_vmax, tc_env_wnds, tc_month, tc_basin, n_seeds, seed_tries))
 
 """
 Runs the downscaling model in basin "basin_id" according to the
@@ -406,13 +417,6 @@ def run_downscaling(basin_id, year = 999):
     
     if (namelist.seeding == 'manual') & (namelist.wind_ts == 'monthly'):
         print('Error: manual seeding only supported for 6-hourly wind data!')
-        return
-
-    if namelist.gnu_parallel == True: fn_trk_out = fn_tracks_duplicates(get_fn_tracks(b, year))
-    else: fn_trk_out = fn_tracks_duplicates(get_fn_tracks(b))
-
-    if os.path.exists(fn_trk_out):
-        print(f"File {fn_trk_out} already exists.")
         return
 
     lazy_results = []; f_args = [];
@@ -437,7 +441,6 @@ def run_downscaling(basin_id, year = 999):
     n_seeds = np.array([x[8] for x in out])
 
     seed_tries = pd.concat([x[9] for x in out], axis = 0)
-    tc_tries = pd.concat([x[10] for x in out], axis = 0)
 
     total_time_s = namelist.total_track_time_days*24*60*60
     n_steps_output = int(total_time_s / namelist.output_interval_s) + 1
@@ -469,10 +472,10 @@ def run_downscaling(basin_id, year = 999):
                               'year': yr_trks, 'basin': basin_ids, name: t})
  
     os.makedirs('%s/%s' % (namelist.base_directory, namelist.exp_name), exist_ok = True)
-    if namelist.gnu_parallel == True: fn_trk_out = fn_tracks_duplicates(get_fn_tracks(b, year))
-    else: fn_trk_out = fn_tracks_duplicates(get_fn_tracks(b))
-    seed_tries.to_csv('%s/%s/seed_tries_%s.csv' % (namelist.output_directory, namelist.exp_name, namelist.exp_prefix), mode = 'w')
-    tc_tries.to_csv('%s/%s/tc_tries_%s.csv' % (namelist.output_directory, namelist.exp_name, namelist.exp_prefix), mode = 'w')
+    fn_trk_out = fn_duplicates(get_fn_tracks(b, year))
+    fn_sd_out = fn_duplicates(get_fn_seeds(b, year))
+
+    seed_tries.to_csv(fn_sd_out, mode = 'w')
     ds.to_netcdf(fn_trk_out, mode = 'w')
     print('Saved %s' % fn_trk_out)
     print(time.time() - s)

@@ -63,7 +63,7 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
                 if isinstance(self.f_vpot, list):
                     # Convert `new_dt` to a compatible format (if it's not already a datetime object)
                     if not isinstance(new_dt, pd.Timestamp):
-                    new_dt = pd.to_datetime(new_dt)
+                        new_dt = pd.to_datetime(new_dt)
                     
                     # Calculate the time differences and find the nearest index
                     time_diffs = [abs((new_dt - pd.to_datetime(str(time.values))).total_seconds()) for time in self.times]
@@ -149,7 +149,7 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
             if isinstance(self.f_chi, list):
                 # Convert `new_dt` to a compatible format (if it's not already a datetime object)
                 if not isinstance(new_dt, pd.Timestamp):
-                new_dt = pd.to_datetime(new_dt)
+                    new_dt = pd.to_datetime(new_dt)
                 # Calculate the time differences and find the nearest index
                 time_diffs = [abs((new_dt - pd.to_datetime(str(time.values))).total_seconds()) for time in self.times]
                 nearest_idx = time_diffs.index(min(time_diffs))
@@ -308,7 +308,7 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
         self.Fs_i = interp1d(self.t_s, self.Fs, axis = 1)
 
         # If sub-monthly chi/vpot supplied, reinitialize those variables as time arrays
-        if namelist.thermo_ts:
+        if namelist.thermo_ts == 'sub-monthly':
             self.reinit_fields(lon, lat, chi, vpot)
         # If the ventilation index is above some threshold, do not integrate.
         S = self._calc_S(self._env_winds(clon, clat, 0))

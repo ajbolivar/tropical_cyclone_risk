@@ -128,8 +128,8 @@ def gen_thermo(year = 999):
             # Check if year is in this range, save subset from existing thermo file
             if year in range(syr,eyr):
                 thermo = xr.open_dataset(file)
-                thermo_ss = thermo.sel(time=slice('%s-%02d' % start_year, start_month,
-                                                  '%s-%02d' % end_year, end_month))
+                thermo_ss = thermo.sel(time=slice(f'{start_year}-{start_month:02}',
+                                                  f'{end_year}-{end_month:02}'))
                 thermo_ss.to_netcdf(fn_out)
             
     n_chunks = namelist.n_procs
