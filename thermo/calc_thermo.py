@@ -25,10 +25,18 @@ def get_fn_thermo(year = 999):
                                                    namelist.end_year, namelist.end_month)
     return(fn_th)
 
-def running_mean(data, axis, n):
+def running_mean(data, n):
     kernel = np.ones(n) / n
-    out = np.apply_along_axis(np.convolve, axis=0, arr=data, v=kernel, mode='same')
-    return out
+    convolved = np.apply_along_axis(np.convolve, axis = 0, arr = data, v = kernel, mode = 'same')
+    neg = int((n - 1) / 2)
+    smoothed = np.zeros(np.shape(data))
+    smoothed[neg:-neg] = convolved[neg:-neg]
+
+    for i_n in range(neg):
+        smoothed[i_n] = data[:i_n + neg].mean(axis = 0)
+        smoothed[-(i_n + 1)] = data[-(i_n + neg + 1):].mean(axis = 0)
+        
+    return smoothed
 
 def compute_thermo(dt_start, dt_end):
     ds_sst = input.load_sst(dt_start, dt_end).load()
@@ -82,9 +90,11 @@ def compute_thermo(dt_start, dt_end):
         chi[i, :, :] = np.minimum(np.maximum(thermo.sat_deficit(*chi_args), 0), 10)
         rh_mid[i, :, :] = thermo.conv_q_to_rh(ta_midlevel, hus_midlevel, p_midlevel_Pa)
     
-    vmax = running_mean(vmax, axis = 0, n = 5) 
-    chi = running_mean(chi, axis = 0, n = 5)
-    rh_mid = running_mean(rh_mid, axis = 0, n = 5)
+    if namelist.thermo_ts == 'sub-monthly':
+        vmax = running_mean(vmax, n = namelist.window) 
+        chi = running_mean(chi, n = namelist.window)
+        # TO DO: keep rh as monthly mean calculation
+        rh_mid = running_mean(rh_mid, n = 31)
 
     return (vmax, chi, rh_mid)
 

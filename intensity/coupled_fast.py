@@ -11,6 +11,7 @@ from datetime import timedelta
 from scipy.integrate import solve_ivp
 from scipy.interpolate import interp1d, RectBivariateSpline
 import warnings
+import logging
 
 import namelist
 from intensity import geo
@@ -66,7 +67,7 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
                         new_dt = pd.to_datetime(new_dt)
                     
                     # Calculate the time differences and find the nearest index
-                    time_diffs = [abs((new_dt - pd.to_datetime(str(time.values))).total_seconds()) for time in self.times]
+                    time_diffs = list(abs(new_dt - pd.to_datetime(self.times.astype(str))).total_seconds())
                     nearest_idx = time_diffs.index(min(time_diffs))
                     # Return the interpolated value from the correct RectBivariateSpline
                     return self.f_vpot[nearest_idx].ev(clon, clat).flatten()[0]
@@ -151,7 +152,7 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
                 if not isinstance(new_dt, pd.Timestamp):
                     new_dt = pd.to_datetime(new_dt)
                 # Calculate the time differences and find the nearest index
-                time_diffs = [abs((new_dt - pd.to_datetime(str(time.values))).total_seconds()) for time in self.times]
+                time_diffs = list(abs(new_dt - pd.to_datetime(self.times.astype(str))).total_seconds())
                 nearest_idx = time_diffs.index(min(time_diffs))
                 # Return the interpolated value from the correct RectBivariateSpline
                 return self.f_chi[nearest_idx].ev(clon, clat).flatten()[0]
@@ -230,10 +231,7 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
 
     """ Time-derivative of the state vector, y.
     y[0] is longitude, y[1] is latitude, y[2] is v, and y[3] is m."""
-    def dydt(self, t, y):
-        if namelist.debug:
-            print(f'Current timestep t = {t}: lon = {y[0]}, lat = {y[1]}, v = {y[2]}, m = {y[3]}')
-            
+    def dydt(self, t, y):   
         if self.gen_dt is not None:
             new_dt = self.gen_dt + timedelta(seconds = t)
             if new_dt.strftime('%m%d') == '0229': 
@@ -246,8 +244,13 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
         dLondt = v_bam[0] / constants.earth_R * 180. / np.pi / (np.cos(y[1] * np.pi / 180.))
         dLatdt = v_bam[1] / constants.earth_R * 180. / np.pi
 
-        dvdt = self._dvdt(*y, v_bam, env_wnds, t, new_dt)
-        dmdt = self._dmdt(*y, env_wnds, t, new_dt)
+        dvdt = self._dvdt(y[0], y[1], y[2], y[3], v_bam, env_wnds, t, new_dt)
+        dmdt = self._dmdt(y[0], y[1], y[2], y[3], env_wnds, t, new_dt)
+        vpot = self._get_current_vpot(y[0], y[1], new_dt)
+        chi  = self._calc_chi(y[0], y[1], new_dt)
+        # AJB: dump info along track
+        print(f'time, lon, lat, v, m , pi, chi: {new_dt}, {y[0]}, {y[1]}, {y[2]}, {y[3]}, {vpot}, {chi}')
+        
         if self.debug:
             return(np.array([0, 0, dvdt, dmdt]))
         else:
@@ -283,12 +286,18 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
     def reinit_fields(self, lon, lat, chi, vpot):
         f_chi = []
         f_vpot = []
-        self.times = chi.time
+        self.times = chi.time.values # array of datetimes
+        # ofn = f'{namelist.output_directory}/{namelist.exp_name}/{namelist.exp_prefix}'
         print('Reinitializing fields...')
-        for i in range(0,len(chi.time)):
-            print(chi.time[i])
+        for i in range(0, len(self.times)):
+            # AJB: output global chi/vpot fields in namelist output directory
+            # chi.isel(time = i).to_netcdf(f'{ofn}_chi_global_t{i}.nc')
+            # vpot.isel(time = i).to_netcdf(f'{ofn}_vpot_global_t{i}.nc')
             lon_b, lat_b, chi_b = self.basin.transform_global_field(lon, lat, chi.isel(time = i))
             _, _, vpot_b = self.basin.transform_global_field(lon, lat, vpot.isel(time = i))
+            # AJB: output zoomed chi/vpot fields in namelist output directory
+            # chi_b.to_netcdf(f'{ofn}_chi_zoom_t{i}.nc')
+            # vpot_b.to_netcdf(f'{ofn}_vpot_zoom_t{i}.nc')
             f_chi.append(RectBivariateSpline(lon_b, lat_b, chi_b.T, kx=1, ky=1))
             f_vpot.append(RectBivariateSpline(lon_b, lat_b, vpot_b.T, kx=1, ky=1))
 
@@ -298,8 +307,6 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
     """ Generate a track with an initial position of (clon, clat),
         an initial intensity of v, and initial inner core moisture m """
     def gen_track(self, clon, clat, v, m = None, gen_dt = None, chi = None, vpot = None, lon = None, lat = None):
-        if namelist.debug:
-            print('Attempting track.')
         # Make sure that tracks are sufficiently randomized.
         bam_track.random_seed()
         self.gen_dt = gen_dt
@@ -341,5 +348,6 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
 
         res = solve_ivp(fun = self.dydt, t_span = (0, self.total_time), y0 = np.asarray([clon, clat, v, m_init]),
                         t_eval = np.linspace(0, self.total_time, self.total_steps),
-                        events = tc_dissipates, max_step = 86400)
+                        events = tc_dissipates, max_step = 86400, dense_output=True)
+
         return res

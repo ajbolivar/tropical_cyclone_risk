@@ -5,9 +5,9 @@ Namelist file that serves as the configuration file for the TC-risk model.
 """
 ########################## File System Parameters ###########################
 src_directory = os.path.dirname(os.path.abspath(__file__))
-base_directory = '/glade/derecho/scratch/abolivar/tc_risk/input/ERA5/chi_test_coarse/1deg'
-output_directory = '/glade/derecho/scratch/abolivar/tc_risk/output/ERA5/sub_monthly_thermo'
-exp_name = 'test2'
+base_directory = '/glade/derecho/scratch/abolivar/tc_risk/input/ERA5/sub-monthly/1deg'
+output_directory = '/glade/derecho/scratch/abolivar/tc_risk/output/ERA5/thermo_ts_comparison/sub-monthly'
+exp_name = 'many_dummy_storms'
 debug = True
 # For now, we support either 'GCM' or 'ERA5'. Different file types and variable
 # names can be added by modifying the "input.py" file and adding the appropriate
@@ -30,9 +30,10 @@ var_keys = {'ERA5': {'sst': 'SSTK', 'mslp': 'MSL', 'temp': 'T',
                     'lvl': 'plev', 'lon': 'lon', 'lat': 'lat'}}
 
 ########################### Data Input Parameters ###########################
-wind_ts = '6-hourly'     # timestep of input wind data, 'monthly' or '6-hourly'
-thermo_ts = 'sub-monthly' # timestep of input thermo data, 'monthly' or 'sub-monthly'
-seeding = 'random'       # method of storm seeding, 'random' or 'manual'
+wind_ts = '6-hourly'      # timestep of input wind data, 'monthly' or '6-hourly'
+thermo_ts = 'sub-monthly'     # timestep of input thermo data, 'monthly' or 'sub-monthly'
+window = 5                # running mean window in days for sub-monthly thermo
+seeding = 'manual'        # method of storm seeding, 'random' or 'manual'
 # file containing genesis points (lon/lat/date/time)
 gen_points = '/glade/work/abolivar/Pyclogenesis_data/trajectories_ERA5_2005sample.csv'
 # Variable naming for the above file. if 'time' exists, it will override 'year',
@@ -58,14 +59,14 @@ end_month = 12                        # month of end_year to stop downscaling
 These parameters configure the output.
 """
 output_interval_s = 3600              # output interval of tracks, seconds (does not change time integration)
-total_track_time_days = 15            # total time to integrate tracks, days
-tracks_per_year = 20                  # total number of tracks to simulate per year (will be overwritten if seeding is set to 'manual')
+total_track_time_days = 5            # total time to integrate tracks, days
+tracks_per_year = 100                 # total number of tracks to simulate per year (will be overwritten if seeding is set to 'manual')
 
 """
 These parameters configure thermodynamics and thermodynamic constants.
 """
 p_midlevel = 60000
-PI_reduc = 0.80
+PI_reduc = 0.8
 Ck = 1.2e-3
 Cd = 1.2e-3
 select_thermo = 1   # 1 for pseudoadiabatic, 2 for reversible thermodynamics
@@ -79,9 +80,9 @@ These parameters configure track and intensity constants.
 # If 250-, 500-, and 850-hPa, uses three steering levels.
 # The steering_coefficients ('steering_coefs') should have the same 
 # length as the number of levels.
-steering_levels = [250, 850]
+steering_levels = [200, 850]
 steering_coefs = [0.2, 0.8]           # constant steering coefficients if not coupled
-coupled_track = True                  # track coupled to intensity; overrides alpha
+coupled_track = False                 # track coupled to intensity; overrides alpha
 y_alpha = [0.17, 0.83]                # value of steering coefficient at 0 knots
 m_alpha = [0.0025, -0.0025]           # change of each coefficient per unit storm intensity, 1 / kts
 alpha_max = [0.41, 0.78]              # maximum value of each steering coefficient (coupled track only)
@@ -129,4 +130,3 @@ basin_bounds = {'EP': ['180E', '0N', '290E', '60N'],
                 'SP': ['180E', '45S', '250E', '0S'],
                 'WP': ['100E', '0N', '180E', '60N'],
                 'GL': ['0E', '90S', '360E', '90N']}
-

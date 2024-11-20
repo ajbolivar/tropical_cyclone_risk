@@ -47,8 +47,8 @@ def create_yearly_files(year = 999):
     yearE = namelist.end_year
 
     if namelist.gnu_parallel == True:
-        yearS = year
-        yearE = year
+        yearS = int(year)
+        yearE = int(year)
 
     try:
         csv = pd.read_csv(namelist.gen_points,
@@ -73,7 +73,7 @@ def create_yearly_files(year = 999):
     # Make sure longitudes are in 0-360 form
     csv[input.get_genlon_key()] = csv[input.get_genlon_key()] % 360
     
-    for year in range(yearS,yearE+1):
+    for year in range(yearS, yearE+1):
         if yearS == yearE:
             fn_out = '%s/gen_points_%s_%d%02d_%d%02d.csv' % (namelist.output_directory, namelist.exp_prefix, year,
                                                              namelist.start_month, year, namelist.end_month)
@@ -119,14 +119,14 @@ def get_fn_seeds(b, year):
         fn_args = (namelist.output_directory, namelist.exp_name,
                    b.basin_id, namelist.exp_prefix, year, 1,
                    year, 12)
-        fn_sd = '%s/%s/seeds_%s_%s_%d%02d_%d%02d.nc' % fn_args
+        fn_sd = '%s/%s/seeds_%s_%s_%d%02d_%d%02d.csv' % fn_args
 
     else:
         fn_args = (namelist.output_directory, namelist.exp_name,
                    b.basin_id, namelist.exp_prefix,
                    namelist.start_year, namelist.start_month,
                    namelist.end_year, namelist.end_month)
-        fn_sd = '%s/%s/seeds_%s_%s_%d%02d_%d%02d.nc' % fn_args
+        fn_sd = '%s/%s/seeds_%s_%s_%d%02d_%d%02d.csv' % fn_args
     return(fn_sd)
 
 """
@@ -135,9 +135,12 @@ Used when running multiple simulations under the same configuration.
 """
 def fn_duplicates(fn):
     f_int = 0
-    fn_out = fn_trk
+    fn_out = fn
     while os.path.exists(fn_out):
-        fn_out = fn.rstrip('.nc') + '_e%d.nc' % f_int
+        if fn.endswith('.nc'):
+            fn_out = fn.rstrip('.nc') + '_e%d.nc' % f_int
+        elif fn.endswith('.csv'):
+            fn_out = fn.rstrip('.csv') + '_e%d.csv' % f_int
         f_int += 1
     return fn_out
 
@@ -239,24 +242,35 @@ def run_tracks(year, n_tracks, b):
         # Create array of dates to draw from and remove leap day
         start_date = datetime.datetime(year, 1, 1, 0)
         end_date = datetime.datetime(year, 12, 31, 18)
-        interval = datetime.timedelta(hours=6)  # 6-hourly time interval
+        interval = datetime.timedelta(hours = 6)  # 6-hourly time interval
 
         dates = [start_date + i * interval for i in range(int((end_date - start_date) / interval) + 1)
                  if (((start_date + i * interval).month != 2) or (((start_date + i * interval).day) != 29))]
-        if namelist.debug: print(f'Initializing thermo variables...')
-        for i in range(1460):
+        
+        if namelist.debug: print(f'Initializing CoupledFAST objects...')
+
+        idxs = range(0, 1460)
+        # AJB: uncomment line 256 and change second number to test a single timestep
+        # AJB: i = 0 is kept because it is referenced in many places
+        # AJB: this saves time by only initializing cpl_fast over two timesteps
+        # idxs = [0, 1168]
+        idxs = [0] + list(range(604, 1336))
+        
+        for i in idxs:
             dt_6hr = dates[i]
             month_index = int(dt_6hr.month - 1)
             ds_dt_6hr = input.convert_from_datetime(ds_wnd, [dt_6hr])[0]
+            print(i, ds_dt_6hr)
             vpot_6hr = np.nan_to_num(vpot.interp(time = ds_dt_6hr).data, 0)
             rh_mid_6hr = rh_mid.interp(time = ds_dt_6hr).data
             chi_6hr = chi.interp(time = ds_dt_6hr).data
             chi_6hr[np.isnan(chi_6hr)] = 5
             m_init_fx[i] = mat.interp2_fx(lon, lat, rh_mid_6hr)
             chi_6hr = np.maximum(np.minimum(np.exp(np.log(chi_6hr + 1e-3) + namelist.log_chi_fac) + namelist.chi_fac, 5), 1e-5)
-
+    
             mld_month = mat.interp_2d_grid(mld['lon'], mld['lat'], np.nan_to_num(mld[:, :, month_index]), lon, lat)
             strat_month = mat.interp_2d_grid(strat['lon'], strat['lat'], np.nan_to_num(strat[:, :, month_index]), lon, lat)
+        
             cpl_fast[i] = coupled_fast.Coupled_FAST(fn_wnd_stat, b, ds_dt_6hr, namelist.output_interval_s, T_s)
             cpl_fast[i].init_fields(lon, lat, chi_6hr, vpot_6hr, mld_month, strat_month)
 
@@ -267,6 +281,8 @@ def run_tracks(year, n_tracks, b):
     tc_lat = np.full((n_tracks, n_steps), np.nan)
     tc_v = np.full((n_tracks, n_steps), np.nan)
     tc_m = np.full((n_tracks, n_steps), np.nan)
+    tc_vpot = np.full((n_tracks, n_steps), np.nan)
+    tc_chi = np.full((n_tracks, n_steps), np.nan)
     tc_vmax = np.full((n_tracks, n_steps), np.nan)
     tc_env_wnds = np.full((n_tracks, n_steps, cpl_fast[0].nWLvl), np.nan)
     tc_month = np.full(n_tracks, np.nan)
@@ -275,19 +291,27 @@ def run_tracks(year, n_tracks, b):
     seeds_df_list = []
 
     while nt < n_tracks:
+        ct = nt
+        print(nt)
         if namelist.debug: print(f"Attempting track number = {nt}")
         # Skip seed check for manual seeding
         if namelist.seeding == 'manual':
             gen_lon = seed_info[input.get_genlon_key()][nt]
             gen_lat = seed_info[input.get_genlat_key()][nt]
-            gen_dt   = pd.to_datetime('2001' + str(seed_info[input.get_month_key()][nt]) +
+            # Use fixed non-leap year to generate time seed
+            gen_dt  = pd.to_datetime('2001' + str(seed_info[input.get_month_key()][nt]) +
                                      str(seed_info[input.get_day_key()][nt]) +
                                      str(seed_info[input.get_hour_key()][nt]),
                                      format='%Y%m%d%H')
-
-            time_seed = int(((gen_dt.dayofyear - 1) * 4) + gen_dt.hour/6)
-            fast = cpl_fast[time_seed]
-
+            
+            time_seed = int(((gen_dt.dayofyear - 1) * 4) + gen_dt.hour / 6) + 1
+            # Put the correct year back
+            gen_dt = gen_dt.replace(year=year)
+            # Generate array of dates starting with gen_dt 
+            track_dates = pd.date_range(gen_dt, freq ='D', periods = namelist.total_track_time_days, normalize=True)
+            # Failsafe in case date range exceeds the end of the year
+            track_dates = chi.time.to_index().intersection(track_dates)
+            fast = cpl_fast[time_seed - 1]
             # Find basin of genesis location and switch H_bl.
             basin_val = np.zeros(len(basin_ids))
             for (b_idx, basin_id) in enumerate(basin_ids):
@@ -316,11 +340,15 @@ def run_tracks(year, n_tracks, b):
                 if namelist.wind_ts == '6-hourly':
                     # Randomly seed the 6-hour timestep.
                     time_seed = np.random.randint(1,1461)
+                    # AJB: uncomment line 335 to test a single case (+1 for consistency with his code)
+                    # time_seed = idxs[1] + 1
 
+                # Convert random seed index into a datetime
                 gen_dt = seed_to_datetime(year, time_seed - 1)
-                track_dates = pd.date_range(gen_dt, freq ='D', periods = namelist.total_track_time_days)
-                start_time = track_dates[0]
-                end_time = track_dates[-1]
+                # Generate array of dates starting with gen_dt 
+                track_dates = pd.date_range(gen_dt, freq ='D', periods = namelist.total_track_time_days, normalize=True)
+                # Failsafe in case date range exceeds the end of the year
+                track_dates = chi.time.to_index().intersection(track_dates) 
                 fast = cpl_fast[time_seed - 1]
     
                 # Find basin of genesis location and switch H_bl.
@@ -348,9 +376,12 @@ def run_tracks(year, n_tracks, b):
         fast.h_bl = namelist.atm_bl_depth[basin_ids[basin_idx]]
 
         if namelist.debug: print(f'Beginning track integration...')
-        if namelist.thermo_ts == '6-hourly':
-            chi_track = chi.sel(time = slice(start_time, end_time))
-            vpot_track = vpot.sel(time = slice(start_time, end_time))
+            
+        # For submonthly data, pass in a time slice of chi and vpot, genesis timestep, lon, lat for reinit_fields
+        if namelist.thermo_ts == 'sub-monthly':
+            chi_track = chi.sel(time = track_dates)
+            vpot_track = vpot.sel(time = track_dates)
+            print(np.shape(chi_track))
             res = fast.gen_track(gen_lon, gen_lat, v_init, m_init, gen_dt, chi_track, vpot_track, lon, lat)
         elif namelist.thermo_ts == 'monthly':
             res = fast.gen_track(gen_lon, gen_lat, v_init, m_init)
@@ -362,43 +393,67 @@ def run_tracks(year, n_tracks, b):
             v_track = res.y[2]
             m_track = res.y[3]
 
+            # Re-querying chi and vpot along the track (TODO: fix redundancy)
+            solver_times = res.t
+            recalculated_dates = [gen_dt + datetime.timedelta(seconds=t) for t in solver_times]
+
+            chi_track = [fast._calc_chi(lon, lat, dt)
+                         for lon, lat, dt in zip(track_lon, track_lat, recalculated_dates)]
+            vpot_track = [fast._get_current_vpot(lon, lat, dt)
+                          for lon, lat, dt in zip(track_lon, track_lat, recalculated_dates)]
+            
             # If the TC has not reached the threshold m/s after 2 days, throw it away.
             # The TC must also reach the genesis threshold during it's entire lifetime.
             v_thresh = namelist.seed_v_threshold_ms
             v_thresh_2d = np.interp(2*24*60*60, res.t, v_track.flatten())
             is_tc = np.logical_and(np.any(v_track >= v_thresh), v_thresh_2d >= namelist.seed_v_2d_threshold_ms)
 
+        # If TC check fails, remove dumped vpot and chi fields
+        # if not is_tc:
+        #   os.remove('vpot*.nc')
+        #   os.remove('chi*.nc')
+            
         # Skip TC threshold check for manual seeding
         # No stochastic wind generation, so track integration will be identical for repeated attempts
         if namelist.seeding == 'manual': is_tc = True
+        print(f'is_tc: {is_tc}')
         if is_tc:
-            n_time = len(track_lon)
-            tc_lon[nt, 0:n_time] = track_lon
-            tc_lat[nt, 0:n_time] = track_lat
-            tc_v[nt, 0:n_time] = v_track
-            tc_m[nt, 0:n_time] = m_track
-
-            # Redudant calculation, but since environmental winds are not part
-            # of the time-integrated state (a parameter), we recompute it.
-            # TODO: Remove this redudancy by pre-caclulating the env. wind.
-            for i in range(len(track_lon)):
-                tc_env_wnds[nt, i, :] = fast._env_winds(track_lon[i], track_lat[i], fast.t_s[i])     
-            vmax = tc_wind.axi_to_max_wind(track_lon, track_lat, fast.dt_track,
-                                           v_track, tc_env_wnds[nt, 0:n_time, :])
-            if np.nanmax(vmax) >= namelist.seed_vmax_threshold_ms:
+            print(res)
+            if res != None:
+                n_time = len(track_lon)
+                tc_lon[nt, 0:n_time] = track_lon
+                tc_lat[nt, 0:n_time] = track_lat
+                tc_v[nt, 0:n_time] = v_track
+                tc_m[nt, 0:n_time] = m_track
+                tc_vpot[nt, 0:n_time] = vpot_track
+                tc_chi[nt, 0:n_time] = chi_track
+                # Redudant calculation, but since environmental winds are not part
+                # of the time-integrated state (a parameter), we recompute it.
+                # TODO: Remove this redudancy by pre-caclulating the env. wind.
+                for i in range(n_time):
+                    tc_env_wnds[nt, i, :] = fast._env_winds(track_lon[i], track_lat[i], fast.t_s[i])     
+                vmax = tc_wind.axi_to_max_wind(track_lon, track_lat, fast.dt_track,
+                                            v_track, tc_env_wnds[nt, 0:n_time, :])
+            
+                # AJB: Commented out for now to not enforce tc requirements
+                #if np.nanmax(vmax) >= namelist.seed_vmax_threshold_ms:
                 tc_vmax[nt, 0:n_time] = vmax
-                tc_month[nt] = time_seed
-                tc_basin[nt] = basin_ids[basin_idx]
-                nt += 1
-
-        seeds_df = pd.DataFrame([[gen_lat,gen_lon,time_seed,year]],columns=['lat','lon','month','year'])
+            
+            tc_month[nt] = time_seed
+            tc_basin[nt] = basin_ids[basin_idx]
+            nt += 1
+                
+        # If nt has been incremented, the seed succeeded and success = 1
+        # If nt has not been incremented, the seed failed and success = 0
+        success = nt - ct
+        seeds_df = pd.DataFrame([[gen_lat, gen_lon, time_seed, year, success]],columns=['lat', 'lon', 'month', 'year', 'success'])
         seeds_df_list.append(seeds_df)
 
     # If no spatial seed info retained, create empty DataFrame
-    if not seeds_df_list: seed_tries = pd.DataFrame(columns=['lat','lon','month','year'])
+    if not seeds_df_list: seed_tries = pd.DataFrame(columns=['lat', 'lon', 'month', 'year', 'success'])
     else: seed_tries = pd.concat(seeds_df_list)
 
-    return((tc_lon, tc_lat, tc_v, tc_m, tc_vmax, tc_env_wnds, tc_month, tc_basin, n_seeds, seed_tries))
+    return((tc_lon, tc_lat, tc_v, tc_m, tc_vpot, tc_chi, tc_vmax, tc_env_wnds, tc_month, tc_basin, n_seeds, seed_tries))
 
 """
 Runs the downscaling model in basin "basin_id" according to the
@@ -433,14 +488,16 @@ def run_downscaling(basin_id, year = 999):
     tc_lat = np.concatenate([x[1] for x in out], axis = 0)
     tc_v = np.concatenate([x[2] for x in out], axis = 0)
     tc_m = np.concatenate([x[3] for x in out], axis = 0)
-    tc_vmax = np.concatenate([x[4] for x in out], axis = 0)
-    tc_env_wnds = np.concatenate([x[5] for x in out], axis = 0)
-    tc_months = np.concatenate([x[6] for x in out], axis = 0)
-    tc_basins = np.concatenate([x[7] for x in out], axis = 0)
+    tc_vpot = np.concatenate([x[4] for x in out], axis = 0)
+    tc_chi = np.concatenate([x[5] for x in out], axis = 0)
+    tc_vmax = np.concatenate([x[6] for x in out], axis = 0)
+    tc_env_wnds = np.concatenate([x[7] for x in out], axis = 0)
+    tc_months = np.concatenate([x[8] for x in out], axis = 0)
+    tc_basins = np.concatenate([x[9] for x in out], axis = 0)
     tc_years = np.concatenate([[i+yearS]*out[i][0].shape[0] for i in range(len(out))], axis = 0)
-    n_seeds = np.array([x[8] for x in out])
+    n_seeds = np.array([x[10] for x in out])
 
-    seed_tries = pd.concat([x[9] for x in out], axis = 0)
+    seed_tries = pd.concat([x[11] for x in out], axis = 0)
 
     total_time_s = namelist.total_track_time_days*24*60*60
     n_steps_output = int(total_time_s / namelist.output_interval_s) + 1
@@ -463,6 +520,8 @@ def run_downscaling(basin_id, year = 999):
                                      v850_trks = (["n_trk", "time"], tc_env_wnds[:, :, 3]),
                                      v_trks = (["n_trk", "time"], tc_v),
                                      m_trks = (["n_trk", "time"], tc_m),
+                                     vpot_trks = (["n_trk", "time"], tc_vpot),
+                                     chi_trks = (["n_trk", "time"], tc_chi),
                                      vmax_trks = (["n_trk", "time"], tc_vmax),
                                      tc_month = (["n_trk"], tc_months),
                                      tc_basins = (["n_trk"], tc_basins),                                     
