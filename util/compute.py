@@ -253,8 +253,8 @@ def run_tracks(year, n_tracks, b):
         # AJB: uncomment line 256 and change second number to test a single timestep
         # AJB: i = 0 is kept because it is referenced in many places
         # AJB: this saves time by only initializing cpl_fast over two timesteps
-        # idxs = [0, 1168]
-        idxs = [0] + list(range(604, 1336))
+        #idxs = [0, 934]
+        #idxs = [0] + list(range(604, 1336))
         
         for i in idxs:
             dt_6hr = dates[i]
@@ -381,7 +381,6 @@ def run_tracks(year, n_tracks, b):
         if namelist.thermo_ts == 'sub-monthly':
             chi_track = chi.sel(time = track_dates)
             vpot_track = vpot.sel(time = track_dates)
-            print(np.shape(chi_track))
             res = fast.gen_track(gen_lon, gen_lat, v_init, m_init, gen_dt, chi_track, vpot_track, lon, lat)
         elif namelist.thermo_ts == 'monthly':
             res = fast.gen_track(gen_lon, gen_lat, v_init, m_init)
@@ -415,10 +414,9 @@ def run_tracks(year, n_tracks, b):
             
         # Skip TC threshold check for manual seeding
         # No stochastic wind generation, so track integration will be identical for repeated attempts
-        if namelist.seeding == 'manual': is_tc = True
+        #if namelist.seeding == 'manual': is_tc = True
         print(f'is_tc: {is_tc}')
         if is_tc:
-            print(res)
             if res != None:
                 n_time = len(track_lon)
                 tc_lon[nt, 0:n_time] = track_lon

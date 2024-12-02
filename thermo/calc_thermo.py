@@ -25,18 +25,11 @@ def get_fn_thermo(year = 999):
                                                    namelist.end_year, namelist.end_month)
     return(fn_th)
 
-def running_mean(data, n):
-    kernel = np.ones(n) / n
-    convolved = np.apply_along_axis(np.convolve, axis = 0, arr = data, v = kernel, mode = 'same')
-    neg = int((n - 1) / 2)
-    smoothed = np.zeros(np.shape(data))
-    smoothed[neg:-neg] = convolved[neg:-neg]
+def running_mean_xr(data, var, dim, n):
+    var_sm = data[var].rolling({dim: n}, min_periods=1, center=True).mean()
+    data[var] = var_sm
 
-    for i_n in range(neg):
-        smoothed[i_n] = data[:i_n + neg].mean(axis = 0)
-        smoothed[-(i_n + 1)] = data[-(i_n + neg + 1):].mean(axis = 0)
-        
-    return smoothed
+    return data
 
 def compute_thermo(dt_start, dt_end):
     ds_sst = input.load_sst(dt_start, dt_end).load()
@@ -46,6 +39,13 @@ def compute_thermo(dt_start, dt_end):
     lon_ky = input.get_lon_key()
     lat_ky = input.get_lat_key()
     sst_ky = input.get_sst_key()
+    
+    # Compute running means for all input variables
+    if namelist.thermo_ts == 'sub-monthly':
+        ds_sst = running_mean_xr(ds_sst, input.get_sst_key(), 'time', namelist.window)
+        ds_psl = running_mean_xr(ds_psl, input.get_mslp_key(), 'time', namelist.window)
+        ds_ta  = running_mean_xr(ds_ta, input.get_temp_key(), 'time', namelist.window)
+        ds_hus = running_mean_xr(ds_hus, input.get_sp_hum_key(), 'time', 31)
 
     nTime = len(ds_sst['time'])
     vmax = np.zeros(ds_psl[input.get_mslp_key()].shape)
@@ -90,12 +90,6 @@ def compute_thermo(dt_start, dt_end):
         chi[i, :, :] = np.minimum(np.maximum(thermo.sat_deficit(*chi_args), 0), 10)
         rh_mid[i, :, :] = thermo.conv_q_to_rh(ta_midlevel, hus_midlevel, p_midlevel_Pa)
     
-    if namelist.thermo_ts == 'sub-monthly':
-        vmax = running_mean(vmax, n = namelist.window) 
-        chi = running_mean(chi, n = namelist.window)
-        # TO DO: keep rh as monthly mean calculation
-        rh_mid = running_mean(rh_mid, n = 31)
-
     return (vmax, chi, rh_mid)
 
 def gen_thermo(year = 999):

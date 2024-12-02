@@ -235,7 +235,7 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
         if self.gen_dt is not None:
             new_dt = self.gen_dt + timedelta(seconds = t)
             if new_dt.strftime('%m%d') == '0229': 
-                new_dt = new_dt + timedelta(day = 1)
+                new_dt = new_dt + timedelta(days = 1)
         else:
             new_dt = None
             
