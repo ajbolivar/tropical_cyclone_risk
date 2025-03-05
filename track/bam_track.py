@@ -82,7 +82,9 @@ class BetaAdvectionTrack:
         elif namelist.wind_ts == '6-hourly': 
             wnd_Mean = env_wind.read_env_wnd_fn(self.fn_wnd_stat)
 
-        ds = xr.open_dataset(self.fn_wnd_stat)
+        if namelist.gnu_parallel: ds = xr.open_mfdataset(self.fn_wnd_stat)
+        else: ds = xr.open_dataset(self.fn_wnd_stat)
+
         self.datetime_start = input.convert_to_datetime(ds, np.array([self.dt_start]))
         self.wnd_lon = wnd_Mean[0]['lon']
         self.wnd_lat = wnd_Mean[0]['lat']
@@ -112,7 +114,7 @@ class BetaAdvectionTrack:
         for i in range(0, self.nWLvl):
             for j in range(i, self.nWLvl):
                 wnd_cov[i, j] = wnd_cov[j, i]
-
+        
         return(wnd_mean, wnd_cov)
 
     """ Query env_wnd file for nearest 6-hourly winds """
@@ -140,7 +142,6 @@ class BetaAdvectionTrack:
             try:
                 wnd_A = np.linalg.cholesky(wnd_cov)
             except np.linalg.LinAlgError as err:
-                print(self.dt_start)
                 return np.zeros(self.nWLvl)
             wnds = wnd_mean + np.matmul(wnd_A, self.Fs_i(ts))
             return wnds

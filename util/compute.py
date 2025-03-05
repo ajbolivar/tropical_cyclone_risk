@@ -26,8 +26,8 @@ covariances, potential intensity, GPI, and saturation deficit.
 def compute_downscaling_inputs(year = 999):
     print('Computing monthly mean and variance of environmental wind...')
     s = time.time()
-    if namelist.gnu_parallel == True: env_wind.gen_wind_mean_cov(year)
-    else: env_wind.gen_wind_mean_cov()
+    #if namelist.gnu_parallel == True: env_wind.gen_wind_mean_cov(year)
+    #else: env_wind.gen_wind_mean_cov()
     e = time.time()
     print('Time Elapsed: %f s' % (e - s))
 
@@ -213,8 +213,13 @@ def run_tracks(year, n_tracks, b):
                                   
     # To randomly seed in both space and time, load data for each month in the year.
     T_s = namelist.total_track_time_days * 24 * 60 * 60     # total time to run tracks
-    fn_wnd_stat = env_wind.get_env_wnd_fn(year)
-    ds_wnd = xr.open_dataset(fn_wnd_stat)
+    if namelist.gnu_parallel:
+        fn_wnd_stat = [env_wind.get_env_wnd_fn(year), env_wind.get_env_wnd_fn(year + 1)]
+        ds_wnd = xr.open_mfdataset(fn_wnd_stat)
+    else: 
+        fn_wnd_stat = env_wind.get_env_wnd_fn(year)
+        ds_wnd = xr.open_dataset(fn_wnd_stat)
+    
     if namelist.wind_ts == 'monthly':
         cpl_fast = [0] * 12
         m_init_fx = [0] * 12
@@ -253,8 +258,8 @@ def run_tracks(year, n_tracks, b):
         # AJB: uncomment line 256 and change second number to test a single timestep
         # AJB: i = 0 is kept because it is referenced in many places
         # AJB: this saves time by only initializing cpl_fast over two timesteps
-        #idxs = [0, 934]
-        #idxs = [0] + list(range(604, 1336))
+        # idxs = [0, 934]
+        # idxs = [0] + list(range(604, 1336))
         
         for i in idxs:
             dt_6hr = dates[i]
@@ -407,39 +412,29 @@ def run_tracks(year, n_tracks, b):
             v_thresh_2d = np.interp(2*24*60*60, res.t, v_track.flatten())
             is_tc = np.logical_and(np.any(v_track >= v_thresh), v_thresh_2d >= namelist.seed_v_2d_threshold_ms)
 
-        # If TC check fails, remove dumped vpot and chi fields
-        # if not is_tc:
-        #   os.remove('vpot*.nc')
-        #   os.remove('chi*.nc')
-            
-        # Skip TC threshold check for manual seeding
-        # No stochastic wind generation, so track integration will be identical for repeated attempts
         #if namelist.seeding == 'manual': is_tc = True
         print(f'is_tc: {is_tc}')
         if is_tc:
-            if res != None:
-                n_time = len(track_lon)
-                tc_lon[nt, 0:n_time] = track_lon
-                tc_lat[nt, 0:n_time] = track_lat
-                tc_v[nt, 0:n_time] = v_track
-                tc_m[nt, 0:n_time] = m_track
-                tc_vpot[nt, 0:n_time] = vpot_track
-                tc_chi[nt, 0:n_time] = chi_track
-                # Redudant calculation, but since environmental winds are not part
-                # of the time-integrated state (a parameter), we recompute it.
-                # TODO: Remove this redudancy by pre-caclulating the env. wind.
-                for i in range(n_time):
-                    tc_env_wnds[nt, i, :] = fast._env_winds(track_lon[i], track_lat[i], fast.t_s[i])     
-                vmax = tc_wind.axi_to_max_wind(track_lon, track_lat, fast.dt_track,
+            n_time = len(track_lon)
+            tc_lon[nt, 0:n_time] = track_lon
+            tc_lat[nt, 0:n_time] = track_lat
+            tc_v[nt, 0:n_time] = v_track
+            tc_m[nt, 0:n_time] = m_track
+            tc_vpot[nt, 0:n_time] = vpot_track
+            tc_chi[nt, 0:n_time] = chi_track
+            # Redudant calculation, but since environmental winds are not part
+            # of the time-integrated state (a parameter), we recompute it.
+            # TODO: Remove this redudancy by pre-caclulating the env. wind.
+            for i in range(n_time):
+                tc_env_wnds[nt, i, :] = fast._env_winds(track_lon[i], track_lat[i], fast.t_s[i])     
+            vmax = tc_wind.axi_to_max_wind(track_lon, track_lat, fast.dt_track,
                                             v_track, tc_env_wnds[nt, 0:n_time, :])
             
-                # AJB: Commented out for now to not enforce tc requirements
-                #if np.nanmax(vmax) >= namelist.seed_vmax_threshold_ms:
+            if np.nanmax(vmax) >= namelist.seed_vmax_threshold_ms:
                 tc_vmax[nt, 0:n_time] = vmax
-            
-            tc_month[nt] = time_seed
-            tc_basin[nt] = basin_ids[basin_idx]
-            nt += 1
+                tc_month[nt] = time_seed
+                tc_basin[nt] = basin_ids[basin_idx]
+                nt += 1
                 
         # If nt has been incremented, the seed succeeded and success = 1
         # If nt has not been incremented, the seed failed and success = 0

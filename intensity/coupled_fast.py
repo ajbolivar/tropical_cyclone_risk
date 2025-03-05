@@ -287,17 +287,12 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
         f_chi = []
         f_vpot = []
         self.times = chi.time.values # array of datetimes
-        # ofn = f'{namelist.output_directory}/{namelist.exp_name}/{namelist.exp_prefix}'
         print('Reinitializing fields...')
         for i in range(0, len(self.times)):
-            # AJB: output global chi/vpot fields in namelist output directory
-            # chi.isel(time = i).to_netcdf(f'{ofn}_chi_global_t{i}.nc')
-            # vpot.isel(time = i).to_netcdf(f'{ofn}_vpot_global_t{i}.nc')
-            lon_b, lat_b, chi_b = self.basin.transform_global_field(lon, lat, chi.isel(time = i))
-            _, _, vpot_b = self.basin.transform_global_field(lon, lat, vpot.isel(time = i))
-            # AJB: output zoomed chi/vpot fields in namelist output directory
-            # chi_b.to_netcdf(f'{ofn}_chi_zoom_t{i}.nc')
-            # vpot_b.to_netcdf(f'{ofn}_vpot_zoom_t{i}.nc')
+            lon_b, lat_b, chi_b = self.basin.transform_global_field(lon, lat, chi.isel(time = i).data)
+            _, _, vpot_b = self.basin.transform_global_field(lon, lat, vpot.isel(time = i).data)
+            chi_b[np.isnan(chi_b)] = 5
+            chi_b = np.maximum(np.minimum(np.exp(np.log(chi_b + 1e-3) + namelist.log_chi_fac) + namelist.chi_fac, 5), 1e-5)
             f_chi.append(RectBivariateSpline(lon_b, lat_b, chi_b.T, kx=1, ky=1))
             f_vpot.append(RectBivariateSpline(lon_b, lat_b, vpot_b.T, kx=1, ky=1))
 

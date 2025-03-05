@@ -76,7 +76,8 @@ def compute_thermo(dt_start, dt_end):
         if lvl.units in ['millibars', 'hPa']:
             lvl_d *= 100                                    # needs to be in Pa
             p_midlevel = namelist.p_midlevel / 100          # hPa
-            lvl_mid = lvl.sel({input.get_lvl_key(): p_midlevel}, method = 'nearest')
+        
+        lvl_mid = lvl.sel({input.get_lvl_key(): p_midlevel}, method = 'nearest')
 
         # TODO: Check units of psl, ta, and hus
         vmax_args = (sst_interp, psl.data, lvl_d, ta.data, hus.data)
