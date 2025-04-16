@@ -66,23 +66,26 @@ def read_env_wnd_fn(fn_wnd_stat, dt_s = None, dt_e = None):
     var_Mean = wind_mean_vector_names()
     var_Var = wind_cov_matrix_names()
     if dt_s is None:
-        if namelist.gnu_parallel: ds = xr.open_mfdataset(fn_wnd_stat)
+        if (namelist.gnu_parallel) and (namelist.wind_ts == 'monthly'): ds = xr.open_mfdataset(fn_wnd_stat)
         else: ds = xr.open_dataset(fn_wnd_stat)
     else:
         ds = xr.open_dataset(fn_wnd_stat).sel(time = slice(dt_s, dt_e))
     wnd_Mean = [ds[x] for x in var_Mean]
-    wnd_Cov = [['' for i in range(len(var_Mean))] for j in range(len(var_Mean))]
+    
+    if namelist.wind_ts == '6-hourly':
+        return wnd_Mean
+        
+    else:
+        wnd_Cov = [['' for i in range(len(var_Mean))] for j in range(len(var_Mean))]
 
-    for i in range(len(var_Mean)):
-        for j in range(len(var_Mean)):
-            if j > i:
-                wnd_Cov[i][j] = ds[var_Var[j][i]]
-            else:
-                wnd_Cov[i][j] = ds[var_Var[i][j]]
+        for i in range(len(var_Mean)):
+            for j in range(len(var_Mean)):
+                if j > i:
+                    wnd_Cov[i][j] = ds[var_Var[j][i]]
+                else:
+                    wnd_Cov[i][j] = ds[var_Var[i][j]]
                     
-    return (wnd_Mean, wnd_Cov)
-
-
+        return (wnd_Mean, wnd_Cov)
 
 """
 Generate the wind mean and covariance matrices used to advect

@@ -122,7 +122,7 @@ class BetaAdvectionTrack:
         wnd_Mean = env_wind.read_env_wnd_fn(self.fn_wnd_stat)
         var_Mean = env_wind.wind_mean_vector_names()
         
-        wnds = np.array([wnd_Mean[x].sel(time=ct,lon=clon,lat=clat,method='nearest').item() for x in range(len(var_Mean))])
+        wnds = np.array([wnd_Mean[x].sel(lon=clon, lat=clat, time=ct, method='nearest').item() for x in range(len(var_Mean))])
         return wnds
     
     """ Generate the random Fourier Series """
