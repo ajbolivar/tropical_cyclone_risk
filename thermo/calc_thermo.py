@@ -42,6 +42,7 @@ def compute_thermo(dt_start, dt_end):
     
     # Compute running means for all input variables
     if namelist.thermo_ts == 'sub-monthly':
+        print('Computing running means...')
         ds_sst = running_mean_xr(ds_sst, input.get_sst_key(), 'time', namelist.window)
         ds_psl = running_mean_xr(ds_psl, input.get_mslp_key(), 'time', namelist.window)
         ds_ta  = running_mean_xr(ds_ta, input.get_temp_key(), 'time', namelist.window)

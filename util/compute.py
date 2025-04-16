@@ -8,9 +8,11 @@ import datetime
 import calendar
 import numpy as np
 import os
+import sys
 import xarray as xr
 import time
 import pandas as pd
+import pickle
 
 import namelist
 from intensity import coupled_fast, ocean
@@ -96,12 +98,12 @@ def create_yearly_files(year = 999):
 """
 Returns the name of the file containing downscaled tropical cyclone tracks.
 """
-def get_fn_tracks(b, year=999):
+def get_fn_tracks(b, year, jobid):
     if namelist.gnu_parallel == True:
         fn_args = (namelist.output_directory, namelist.exp_name,
                    b.basin_id, namelist.exp_prefix, year, 1,
-                   year, 12)
-        fn_trk = '%s/%s/tracks_%s_%s_%d%02d_%d%02d.nc' % fn_args
+                   year, 12, jobid)
+        fn_trk = '%s/%s/tracks_%s_%s_%d%02d_%d%02d.nc%s' % fn_args
         
     else:
         fn_args = (namelist.output_directory, namelist.exp_name,
@@ -114,12 +116,12 @@ def get_fn_tracks(b, year=999):
 """
 Returns the name of the file containing spatial seed information.
 """
-def get_fn_seeds(b, year):
+def get_fn_seeds(b, year, jobid):
     if namelist.gnu_parallel == True:
         fn_args = (namelist.output_directory, namelist.exp_name,
                    b.basin_id, namelist.exp_prefix, year, 1,
-                   year, 12)
-        fn_sd = '%s/%s/seeds_%s_%s_%d%02d_%d%02d.csv' % fn_args
+                   year, 12, jobid)
+        fn_sd = '%s/%s/seeds_%s_%s_%d%02d_%d%02d.csv%s' % fn_args
 
     else:
         fn_args = (namelist.output_directory, namelist.exp_name,
@@ -155,13 +157,25 @@ def seed_to_datetime(year, time_seed):
     return seed_derived_date
 
 """
+Loads a pickle file containing coupled_fast object.
+"""
+def load_cpl_fast(year, idx):
+    pickle_file = f"{namelist.output_directory}/pickle_files/cpl_fast_{year}_{idx}.pkl"
+    if os.path.exists(pickle_file):
+        with open(pickle_file, 'rb') as f:
+            return pickle.load(f)
+    else:
+        print(f"Pickle file for year {year} and index {idx} not found.")
+        return None
+
+"""
 Generates "n_tracks" number of tropical cyclone tracks, in basin
 described by "b" (can be global), in the year.
 """
 def run_tracks(year, n_tracks, b):
     # Load thermodynamic and ocean variables.
     if namelist.debug: print(f'Currently working on {year}...')
-        
+    sys.stdout.flush()    
     if namelist.gnu_parallel == True: fn_th = calc_thermo.get_fn_thermo(year)
     else: fn_th = calc_thermo.get_fn_thermo()
         
@@ -212,11 +226,12 @@ def run_tracks(year, n_tracks, b):
         n_tracks = len(seed_info)
                                   
     # To randomly seed in both space and time, load data for each month in the year.
+    To_s = namelist.output_interval_s
     T_s = namelist.total_track_time_days * 24 * 60 * 60     # total time to run tracks
-    if namelist.gnu_parallel:
+    if (namelist.gnu_parallel) and (namelist.wind_ts == 'monthly'):
         fn_wnd_stat = [env_wind.get_env_wnd_fn(year), env_wind.get_env_wnd_fn(year + 1)]
         ds_wnd = xr.open_mfdataset(fn_wnd_stat)
-    else: 
+    else:
         fn_wnd_stat = env_wind.get_env_wnd_fn(year)
         ds_wnd = xr.open_dataset(fn_wnd_stat)
     
@@ -236,7 +251,7 @@ def run_tracks(year, n_tracks, b):
             chi_month = np.maximum(np.minimum(np.exp(np.log(chi_month + 1e-3) + namelist.log_chi_fac) + namelist.chi_fac, 5), 1e-5)
             mld_month = mat.interp_2d_grid(mld['lon'], mld['lat'], np.nan_to_num(mld[:, :, i]), lon, lat)
             strat_month = mat.interp_2d_grid(strat['lon'], strat['lat'], np.nan_to_num(strat[:, :, i]), lon, lat)
-            cpl_fast[i] = coupled_fast.Coupled_FAST(fn_wnd_stat, b, ds_dt_month, namelist.output_interval_s, T_s)
+            cpl_fast[i] = coupled_fast.Coupled_FAST(fn_wnd_stat, b, ds_dt_month, To_s, T_s)
             cpl_fast[i].init_fields(lon, lat, chi_month, vpot_month, mld_month, strat_month)
 
     if namelist.wind_ts == '6-hourly':
@@ -253,7 +268,7 @@ def run_tracks(year, n_tracks, b):
                  if (((start_date + i * interval).month != 2) or (((start_date + i * interval).day) != 29))]
         
         if namelist.debug: print(f'Initializing CoupledFAST objects...')
-
+        sys.stdout.flush()
         idxs = range(0, 1460)
         # AJB: uncomment line 256 and change second number to test a single timestep
         # AJB: i = 0 is kept because it is referenced in many places
@@ -263,25 +278,37 @@ def run_tracks(year, n_tracks, b):
         
         for i in idxs:
             dt_6hr = dates[i]
-            month_index = int(dt_6hr.month - 1)
             ds_dt_6hr = input.convert_from_datetime(ds_wnd, [dt_6hr])[0]
             print(i, ds_dt_6hr)
-            vpot_6hr = np.nan_to_num(vpot.interp(time = ds_dt_6hr).data, 0)
+            sys.stdout.flush()
             rh_mid_6hr = rh_mid.interp(time = ds_dt_6hr).data
-            chi_6hr = chi.interp(time = ds_dt_6hr).data
-            chi_6hr[np.isnan(chi_6hr)] = 5
             m_init_fx[i] = mat.interp2_fx(lon, lat, rh_mid_6hr)
-            chi_6hr = np.maximum(np.minimum(np.exp(np.log(chi_6hr + 1e-3) + namelist.log_chi_fac) + namelist.chi_fac, 5), 1e-5)
-    
-            mld_month = mat.interp_2d_grid(mld['lon'], mld['lat'], np.nan_to_num(mld[:, :, month_index]), lon, lat)
-            strat_month = mat.interp_2d_grid(strat['lon'], strat['lat'], np.nan_to_num(strat[:, :, month_index]), lon, lat)
-        
-            cpl_fast[i] = coupled_fast.Coupled_FAST(fn_wnd_stat, b, ds_dt_6hr, namelist.output_interval_s, T_s)
-            cpl_fast[i].init_fields(lon, lat, chi_6hr, vpot_6hr, mld_month, strat_month)
+
+            os.makedirs(f'{namelist.output_directory}/pickle_files', exist_ok=True)
+            pickle_fn = os.path.join(namelist.output_directory, f'pickle_files/cpl_fast_{year}_{i}.pkl')
+            if not os.path.exists(pickle_fn):
+                month_index = int(dt_6hr.month - 1)
+                sys.stdout.flush()
+                vpot_6hr = np.nan_to_num(vpot.interp(time = ds_dt_6hr).data, 0)
+                rh_mid_6hr = rh_mid.interp(time = ds_dt_6hr).data
+                chi_6hr = chi.interp(time = ds_dt_6hr).data
+                chi_6hr[np.isnan(chi_6hr)] = 5
+                chi_6hr = np.maximum(np.minimum(np.exp(np.log(chi_6hr + 1e-3) + namelist.log_chi_fac) + namelist.chi_fac, 5), 1e-5)
+            
+                mld_month = mat.interp_2d_grid(mld['lon'], mld['lat'], np.nan_to_num(mld[:, :, month_index]), lon, lat)
+                strat_month = mat.interp_2d_grid(strat['lon'], strat['lat'], np.nan_to_num(strat[:, :, month_index]), lon, lat)
+                # Create Coupled_FAST object
+                cpl_fast = coupled_fast.Coupled_FAST(fn_wnd_stat, b, ds_dt_6hr, namelist.output_interval_s, T_s)
+                cpl_fast.init_fields(lon, lat, chi_6hr, vpot_6hr, mld_month, strat_month)
+                
+                # Serialize and save object to a file
+                with open(pickle_fn, 'wb') as f:
+                    pickle.dump(cpl_fast, f)
+
 
     # Output vectors.
     nt = 0
-    n_steps = cpl_fast[0].total_steps
+    n_steps = int(T_s / To_s) + 1
     tc_lon = np.full((n_tracks, n_steps), np.nan)
     tc_lat = np.full((n_tracks, n_steps), np.nan)
     tc_v = np.full((n_tracks, n_steps), np.nan)
@@ -289,7 +316,8 @@ def run_tracks(year, n_tracks, b):
     tc_vpot = np.full((n_tracks, n_steps), np.nan)
     tc_chi = np.full((n_tracks, n_steps), np.nan)
     tc_vmax = np.full((n_tracks, n_steps), np.nan)
-    tc_env_wnds = np.full((n_tracks, n_steps, cpl_fast[0].nWLvl), np.nan)
+    tc_env_wnds = np.full((n_tracks, n_steps, len(namelist.steering_levels) * 2), np.nan)
+    print(np.shape(tc_env_wnds))
     tc_month = np.full(n_tracks, np.nan)
     tc_basin = np.full(n_tracks, "", dtype = 'U2')
     
@@ -297,7 +325,6 @@ def run_tracks(year, n_tracks, b):
 
     while nt < n_tracks:
         ct = nt
-        print(nt)
         if namelist.debug: print(f"Attempting track number = {nt}")
         # Skip seed check for manual seeding
         if namelist.seeding == 'manual':
@@ -316,7 +343,10 @@ def run_tracks(year, n_tracks, b):
             track_dates = pd.date_range(gen_dt, freq ='D', periods = namelist.total_track_time_days, normalize=True)
             # Failsafe in case date range exceeds the end of the year
             track_dates = chi.time.to_index().intersection(track_dates)
-            fast = cpl_fast[time_seed - 1]
+
+            if namelist.wind_ts == '6-hourly': fast = load_cpl_fast(year, time_seed - 1)
+            if namelist.wind_ts == 'monthly': fast = cpl_fast[time_seed - 1]
+                
             # Find basin of genesis location and switch H_bl.
             basin_val = np.zeros(len(basin_ids))
             for (b_idx, basin_id) in enumerate(basin_ids):
@@ -342,11 +372,15 @@ def run_tracks(year, n_tracks, b):
                 if namelist.wind_ts == 'monthly':
                     # Randomly seed the month.
                     time_seed = np.random.randint(1, 13)
+                    fast = cpl_fast[time_seed - 1]
+                
                 if namelist.wind_ts == '6-hourly':
                     # Randomly seed the 6-hour timestep.
                     time_seed = np.random.randint(1,1461)
                     # AJB: uncomment line 335 to test a single case (+1 for consistency with his code)
                     # time_seed = idxs[1] + 1
+                    # Load pickle file
+                    fast = load_cpl_fast(year, time_seed - 1)
 
                 # Convert random seed index into a datetime
                 gen_dt = seed_to_datetime(year, time_seed - 1)
@@ -354,8 +388,7 @@ def run_tracks(year, n_tracks, b):
                 track_dates = pd.date_range(gen_dt, freq ='D', periods = namelist.total_track_time_days, normalize=True)
                 # Failsafe in case date range exceeds the end of the year
                 track_dates = chi.time.to_index().intersection(track_dates) 
-                fast = cpl_fast[time_seed - 1]
-    
+
                 # Find basin of genesis location and switch H_bl.
                 basin_val = np.zeros(len(basin_ids))
                 for (b_idx, basin_id) in enumerate(basin_ids):
@@ -382,7 +415,7 @@ def run_tracks(year, n_tracks, b):
 
         if namelist.debug: print(f'Beginning track integration...')
             
-        # For submonthly data, pass in a time slice of chi and vpot, genesis timestep, lon, lat for reinit_fields
+        # For submonthly thermo data, pass in a time slice of chi and vpot, genesis timestep, lon, lat for reinit_fields
         if namelist.thermo_ts == 'sub-monthly':
             chi_track = chi.sel(time = track_dates)
             vpot_track = vpot.sel(time = track_dates)
@@ -426,6 +459,7 @@ def run_tracks(year, n_tracks, b):
             # of the time-integrated state (a parameter), we recompute it.
             # TODO: Remove this redudancy by pre-caclulating the env. wind.
             for i in range(n_time):
+                print(nt, i)
                 tc_env_wnds[nt, i, :] = fast._env_winds(track_lon[i], track_lat[i], fast.t_s[i])     
             vmax = tc_wind.axi_to_max_wind(track_lon, track_lat, fast.dt_track,
                                             v_track, tc_env_wnds[nt, 0:n_time, :])
@@ -452,29 +486,33 @@ def run_tracks(year, n_tracks, b):
 Runs the downscaling model in basin "basin_id" according to the
 settings in the namelist.txt file.
 """
-def run_downscaling(basin_id, year = 999):
+def run_downscaling(basin_id, year = None, jobid = ''):
     n_tracks = namelist.tracks_per_year   # number of tracks per year
     n_procs = namelist.n_procs
     b = basins.TC_Basin(basin_id)
     yearS = namelist.start_year
     yearE = namelist.end_year
 
-    if namelist.gnu_parallel == True:
-        yearS = year
-        yearE = year
-    
     if (namelist.seeding == 'manual') & (namelist.wind_ts == 'monthly'):
         print('Error: manual seeding only supported for 6-hourly wind data!')
         return
 
-    lazy_results = []; f_args = [];
-    for yr in range(yearS, yearE+1):
-        lazy_result = dask.delayed(run_tracks)(yr, n_tracks, b)
-        f_args.append((yr, n_tracks, b))
-        lazy_results.append(lazy_result)
-
     s = time.time()
-    out = dask.compute(*lazy_results, scheduler = 'processes', num_workers = n_procs)
+    if namelist.gnu_parallel == True:
+        yearS = year
+        yearE = year    
+        out = []; f_args = []
+        f_args.append((year, n_tracks, b))
+        out.append(run_tracks(year, n_tracks, b))
+
+    else:
+        lazy_results = []; f_args = [];
+        for yr in range(yearS, yearE+1):
+            lazy_result = dask.delayed(run_tracks)(yr, n_tracks, b)
+            f_args.append((yr, n_tracks, b))
+            lazy_results.append(lazy_result)
+
+        out = dask.compute(*lazy_results, scheduler = 'processes', num_workers = n_procs)
 
     # Process the output and save as a netCDF file.
     tc_lon = np.concatenate([x[0] for x in out], axis = 0)
@@ -524,8 +562,8 @@ def run_downscaling(basin_id, year = 999):
                               'year': yr_trks, 'basin': basin_ids, name: t})
  
     os.makedirs('%s/%s' % (namelist.base_directory, namelist.exp_name), exist_ok = True)
-    fn_trk_out = fn_duplicates(get_fn_tracks(b, year))
-    fn_sd_out = fn_duplicates(get_fn_seeds(b, year))
+    fn_trk_out = fn_duplicates(get_fn_tracks(b, year, jobid))
+    fn_sd_out = fn_duplicates(get_fn_seeds(b, year, jobid))
 
     seed_tries.to_csv(fn_sd_out, mode = 'w')
     ds.to_netcdf(fn_trk_out, mode = 'w')
