@@ -28,8 +28,8 @@ covariances, potential intensity, GPI, and saturation deficit.
 def compute_downscaling_inputs(year = 999):
     print('Computing monthly mean and variance of environmental wind...')
     s = time.time()
-    #if namelist.gnu_parallel == True: env_wind.gen_wind_mean_cov(year)
-    #else: env_wind.gen_wind_mean_cov()
+    if namelist.gnu_parallel == True: env_wind.gen_wind_mean_cov(year)
+    else: env_wind.gen_wind_mean_cov()
     e = time.time()
     print('Time Elapsed: %f s' % (e - s))
 
@@ -269,7 +269,16 @@ def run_tracks(year, n_tracks, b):
         
         if namelist.debug: print(f'Initializing CoupledFAST objects...')
         sys.stdout.flush()
-        idxs = range(0, 1460)
+
+        # If seeding manually, only initialize timesteps that are needed
+        if namelist.seeding == 'manual':
+            indices = [
+                      dates.index(datetime.datetime(y, m, d, h))
+                      for y, m, d, h in zip(seed_info.year, seed_info.month, seed_info.day, seed_info.hour)
+                      ]
+            idxs = np.unique(indices)
+        else:
+            idxs = range(0, 1460)
         # AJB: uncomment line 256 and change second number to test a single timestep
         # AJB: i = 0 is kept because it is referenced in many places
         # AJB: this saves time by only initializing cpl_fast over two timesteps
@@ -317,7 +326,6 @@ def run_tracks(year, n_tracks, b):
     tc_chi = np.full((n_tracks, n_steps), np.nan)
     tc_vmax = np.full((n_tracks, n_steps), np.nan)
     tc_env_wnds = np.full((n_tracks, n_steps, len(namelist.steering_levels) * 2), np.nan)
-    print(np.shape(tc_env_wnds))
     tc_month = np.full(n_tracks, np.nan)
     tc_basin = np.full(n_tracks, "", dtype = 'U2')
     
@@ -459,7 +467,6 @@ def run_tracks(year, n_tracks, b):
             # of the time-integrated state (a parameter), we recompute it.
             # TODO: Remove this redudancy by pre-caclulating the env. wind.
             for i in range(n_time):
-                print(nt, i)
                 tc_env_wnds[nt, i, :] = fast._env_winds(track_lon[i], track_lat[i], fast.t_s[i])     
             vmax = tc_wind.axi_to_max_wind(track_lon, track_lat, fast.dt_track,
                                             v_track, tc_env_wnds[nt, 0:n_time, :])
