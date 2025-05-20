@@ -3,6 +3,7 @@ import subprocess
 import namelist
 import numpy as np
 import time
+from util import constants
 from scipy import interpolate
 
 """
@@ -33,6 +34,20 @@ def map_to_fx(source_idx, fxs):
         raise ValueError('Source index is not valid. See namelist configuration.')
     else:
         return(fxs[source_idx])
+
+def haversine(lat1, lon1, lat2, lon2):
+    lat1_rad = np.radians(lat1)
+    lon1_rad = np.radians(lon1)
+    lat2_rad = np.radians(lat2)
+    lon2_rad = np.radians(lon2)
+
+    dlat = lat2_rad - lat1_rad
+    dlon = lon2_rad - lon1_rad
+
+    a = np.sin(dlat/2)**2 + np.cos(lat1_rad) * np.cos(lat2_rad) * np.sin(dlon/2)**2
+    c = 2 * np.arcsin(np.sqrt(a))
+
+    return (constants.earth_R / 1000) * c  # distance in km
 
 def is_nc_file_valid(fn):
     is_valid = True
