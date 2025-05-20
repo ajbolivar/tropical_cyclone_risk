@@ -13,7 +13,7 @@ from scipy.interpolate import interp1d
 
 import namelist
 from track import env_wind
-from util import input, mat, sphere
+from util import input, mat, sphere, constants, util
 
 """
 Generate F from Emanuel et. al. (2006). It is a Fourier series where
@@ -63,6 +63,7 @@ class BetaAdvectionTrack:
         self.var_names = env_wind.wind_mean_vector_names()
         self.u_Mean_idxs = np.zeros(self.nLvl).astype(int)
         self.v_Mean_idxs = np.zeros(self.nLvl).astype(int)
+
         p_lvls = namelist.steering_levels
         for i in range(self.nLvl):
             self.u_Mean_idxs[i] = int(self.var_names.index('ua' + str(p_lvls[i]) + '_Mean'))
@@ -88,6 +89,8 @@ class BetaAdvectionTrack:
         self.datetime_start = input.convert_to_datetime(ds, np.array([self.dt_start]))
         self.wnd_lon = wnd_Mean[0]['lon']
         self.wnd_lat = wnd_Mean[0]['lat']
+        
+        self.wind_lon_grid, self.wind_lat_grid = np.meshgrid(self.wnd_lon, self.wnd_lat)
 
         # Calculating weights is not necessary when using 6-hourly data
         if namelist.wind_ts == 'monthly':
@@ -121,8 +124,11 @@ class BetaAdvectionTrack:
     def query_wnd_nearest(self, clon, clat, ct):
         wnd_Mean = env_wind.read_env_wnd_fn(self.fn_wnd_stat)
         var_Mean = env_wind.wind_mean_vector_names()
-        
-        wnds = np.array([wnd_Mean[x].sel(lon=clon, lat=clat, time=ct, method='nearest').item() for x in range(len(var_Mean))])
+        distance_grid = util.haversine(clat, clon, self.wind_lat_grid, self.wind_lon_grid)
+        mask = distance_grid <= 300
+       
+        wnds_at_time = [wnd_Mean[x].sel(time=ct, method='nearest') for x in range(len(var_Mean))]
+        wnds = np.array([wnds_at_time[x].where(mask).mean(dim=['lat', 'lon']).values.item() for x in range(len(wnds_at_time))])
         return wnds
     
     """ Generate the random Fourier Series """
