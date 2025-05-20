@@ -17,7 +17,7 @@ import namelist
 from intensity import geo
 from thermo import thermo
 from track import bam_track, env_wind
-from util import constants
+from util import constants, util
 
 class Coupled_FAST(bam_track.BetaAdvectionTrack):
     def __init__(self, fn_wnd_stat, basin, dt_start, dt_s, total_time_s):
@@ -148,14 +148,23 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
         try:
             # Check if f_chi is a list or a single RectBivariateSpline
             if isinstance(self.f_chi, list):
-                # Convert `new_dt` to a compatible format (if it's not already a datetime object)
                 if not isinstance(new_dt, pd.Timestamp):
                     new_dt = pd.to_datetime(new_dt)
-                # Calculate the time differences and find the nearest index
-                time_diffs = list(abs(new_dt - pd.to_datetime(self.times.astype(str))).total_seconds())
-                nearest_idx = time_diffs.index(min(time_diffs))
-                # Return the interpolated value from the correct RectBivariateSpline
-                return self.f_chi[nearest_idx].ev(clon, clat).flatten()[0]
+                
+                nearest_idx = np.argmin(np.abs(pd.to_datetime(self.times) - new_dt))
+                chi_field = self.chi_fields[nearest_idx]
+
+                distances = util.haversine(clat, clon, self.basin_lat_grid, self.basin_lon_grid)
+
+                mask = distances <= 300 # Radius in km
+
+                chi_field = self.chi_fields[nearest_idx]
+
+                chi_local = chi_field[mask]
+                chi_95 = np.percentile(chi_local, 95)
+
+                return chi_95
+
             else:
                 return self.f_chi.ev(clon, clat).flatten()[0]
                 
@@ -287,17 +296,22 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
         f_chi = []
         f_vpot = []
         self.times = chi.time.values # array of datetimes
+        chi_fields = []  # Store transformed chi fields
+        
         print('Reinitializing fields...')
         for i in range(0, len(self.times)):
             lon_b, lat_b, chi_b = self.basin.transform_global_field(lon, lat, chi.isel(time = i).data)
             _, _, vpot_b = self.basin.transform_global_field(lon, lat, vpot.isel(time = i).data)
             chi_b[np.isnan(chi_b)] = 5
             chi_b = np.maximum(np.minimum(np.exp(np.log(chi_b + 1e-3) + namelist.log_chi_fac) + namelist.chi_fac, 5), 1e-5)
+            chi_fields.append(chi_b)
             f_chi.append(RectBivariateSpline(lon_b, lat_b, chi_b.T, kx=1, ky=1))
             f_vpot.append(RectBivariateSpline(lon_b, lat_b, vpot_b.T, kx=1, ky=1))
 
+        self.chi_fields = chi_fields
         self.f_chi = f_chi
         self.f_vpot = f_vpot
+        self.basin_lat_grid, self.basin_lon_grid = np.meshgrid(lat_b, lon_b, indexing='ij')
 
     """ Generate a track with an initial position of (clon, clat),
         an initial intensity of v, and initial inner core moisture m """
