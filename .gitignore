@@ -1,0 +1,10 @@
+*pycache*
+*pynb*
+*~
+*.nc
+*.status
+*.pyc
+submit_casper.sh
+submit_derecho.sh
+land/*
+namelist.py
