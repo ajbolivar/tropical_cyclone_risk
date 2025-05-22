@@ -151,19 +151,27 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
                 if not isinstance(new_dt, pd.Timestamp):
                     new_dt = pd.to_datetime(new_dt)
                 
-                nearest_idx = np.argmin(np.abs(pd.to_datetime(self.times) - new_dt))
-                chi_field = self.chi_fields[nearest_idx]
+                if namelist.chi_radius:
+                    nearest_idx = np.argmin(np.abs(pd.to_datetime(self.times) - new_dt))
+                    chi_field = self.chi_fields[nearest_idx]
 
-                distances = util.haversine(clat, clon, self.basin_lat_grid, self.basin_lon_grid)
+                    distances = util.haversine(clat, clon, self.basin_lat_grid, self.basin_lon_grid)
 
-                mask = distances <= 300 # Radius in km
+                    mask = distances <= 300 # Radius in km
 
-                chi_field = self.chi_fields[nearest_idx]
+                    chi_field = self.chi_fields[nearest_idx]
 
-                chi_local = chi_field[mask]
-                chi_95 = np.percentile(chi_local, 95)
+                    chi_local = chi_field[mask]
+                    chi_95 = np.percentile(chi_local, 95)
 
-                return chi_95
+                    return chi_95
+
+                else:
+                    time_diffs = list(abs(new_dt - pd.to_datetime(self.times.astype(str))).total_seconds())
+                    nearest_idx = time_diffs.index(min(time_diffs))
+
+                    # Return the interpolated value from the correct RectBivariateSpline
+                    return self.f_chi[nearest_idx].ev(clon, clat).flatten()[0]
 
             else:
                 return self.f_chi.ev(clon, clat).flatten()[0]
@@ -303,7 +311,10 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
             lon_b, lat_b, chi_b = self.basin.transform_global_field(lon, lat, chi.isel(time = i).data)
             _, _, vpot_b = self.basin.transform_global_field(lon, lat, vpot.isel(time = i).data)
             chi_b[np.isnan(chi_b)] = 5
-            chi_b = np.maximum(np.minimum(np.exp(np.log(chi_b + 1e-3) + namelist.log_chi_fac) + namelist.chi_fac, 5), 1e-5)
+            
+            if not namelist.chi_radius:
+                chi_b = np.maximum(np.minimum(np.exp(np.log(chi_b + 1e-3) + namelist.log_chi_fac) + namelist.chi_fac, 5), 1e-5)
+            
             chi_fields.append(chi_b)
             f_chi.append(RectBivariateSpline(lon_b, lat_b, chi_b.T, kx=1, ky=1))
             f_vpot.append(RectBivariateSpline(lon_b, lat_b, vpot_b.T, kx=1, ky=1))

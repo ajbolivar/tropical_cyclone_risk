@@ -5,9 +5,9 @@ Namelist file that serves as the configuration file for the TC-risk model.
 """
 ########################## File System Parameters ###########################
 src_directory = os.path.dirname(os.path.abspath(__file__))
-base_directory = '/glade/derecho/scratch/abolivar/tc_risk/input/ERA5/sub-monthly/1deg'
-output_directory = '/glade/campaign/univ/upsu0068/output/ERA5/6-hourly/second_run/vr/sub-monthly_thermo/irma'
-exp_name = 'with_chi'
+base_directory = '/path/to/input/dir'
+output_directory = '/path/to/output/dir'
+exp_name = 'exp'
 debug = True
 # For now, we support either 'GCM' or 'ERA5'. Different file types and variable
 # names can be added by modifying the "input.py" file and adding the appropriate
@@ -33,14 +33,14 @@ var_keys = {'ERA5': {'sst': 'SSTK', 'mslp': 'MSL', 'temp': 'T',
 wind_ts = '6-hourly'     # timestep of input wind data, 'monthly' or '6-hourly'
 thermo_ts = 'sub-monthly' # timestep of input thermo data, 'monthly' or 'sub-monthly'
 window = 5
-seeding = 'manual'       # method of storm seeding, 'random' or 'manual'
+seeding = 'random'       # method of storm seeding, 'random' or 'manual'
 # file containing genesis points (lon/lat/date/time)
 gen_points = '/glade/work/abolivar/track_data/trajectories_ERA5_2005sample.csv'
 # Variable naming for the above file. if 'time' exists, it will override 'year',
 # 'month','day', and 'hour' when accessing the file.
 gen_var_keys = {'trackid': 'sid', 'time': 'time', 'year': 'year', 
                 'month': 'month', 'day': 'day', 'hour': 'hour', 'lon': 'lon', 
-                'lat': 'lat',}
+                'lat': 'lat', 'wind': 'wind'}
 
 ########################### Parallelism Parameters ##########################
 n_procs = 1             # number of processes to use in dask
@@ -71,6 +71,9 @@ Ck = 1.2e-3
 Cd = 1.2e-3
 select_thermo = 1   # 1 for pseudoadiabatic, 2 for reversible thermodynamics
 select_interp = 2   # 1 for computation, 2 for interpolation
+chi_radius = False
+wind_radius = False
+rwind = 1000
 
 """
 These parameters configure track and intensity constants.
@@ -87,10 +90,10 @@ y_alpha = [0.17, 0.83]                # value of steering coefficient at 0 knots
 m_alpha = [0.0025, -0.0025]           # change of each coefficient per unit storm intensity, 1 / kts
 alpha_max = [0.41, 0.78]              # maximum value of each steering coefficient (coupled track only)
 alpha_min = [0.22, 0.59]              # minimum value of each steering coefficient (coupled track only)
-u_beta = -1.0                         # zonal beta drift, m/s
-v_beta = 2.5                          # meridional beta drift, m/s
+u_beta = 0                            # zonal beta drift, m/s
+v_beta = 0                            # meridional beta drift, m/s
 T_days = 20                           # period of the fourier series, days
-seed_v_init_ms = 69.44                # initial seed v intensity, m/s
+seed_v_init_ms = 5                    # initial seed v intensity, m/s
 seed_v_2d_threshold_ms = 6.5          # seed v threshold after 2 days, m/s
 seed_v_threshold_ms = 15              # seed v threshold over entire lifetime, m/s
 seed_vmax_threshold_ms = 18           # seed vmax threshold over entire lifetime, m/s

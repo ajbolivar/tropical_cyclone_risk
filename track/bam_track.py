@@ -90,7 +90,9 @@ class BetaAdvectionTrack:
         self.wnd_lon = wnd_Mean[0]['lon']
         self.wnd_lat = wnd_Mean[0]['lat']
         
-        self.wind_lon_grid, self.wind_lat_grid = np.meshgrid(self.wnd_lon, self.wnd_lat)
+        lon_b, lat_b, _ = self.basin.transform_global_field(self.wnd_lon, self.wnd_lat, 
+                                                           np.zeros((len(self.wnd_lat),len(self.wnd_lon))))
+        self.wind_lon_grid, self.wind_lat_grid = np.meshgrid(lon_b, lat_b)
 
         # Calculating weights is not necessary when using 6-hourly data
         if namelist.wind_ts == 'monthly':
@@ -122,13 +124,22 @@ class BetaAdvectionTrack:
 
     """ Query env_wnd file for nearest 6-hourly winds """
     def query_wnd_nearest(self, clon, clat, ct):
-        wnd_Mean = env_wind.read_env_wnd_fn(self.fn_wnd_stat)
-        var_Mean = env_wind.wind_mean_vector_names()
-        distance_grid = util.haversine(clat, clon, self.wind_lat_grid, self.wind_lon_grid)
-        mask = distance_grid <= 300
+        if namelist.wind_radius:
+            wnd_Mean = env_wind.read_env_wnd_fn(self.fn_wnd_stat)
+            var_Mean = env_wind.wind_mean_vector_names()
+            wnds_t = [wnd_Mean[x].sel(time=ct, method='nearest').squeeze() for x in range(len(var_Mean))]
+            wnds_b = [self.basin.transform_global_field(self.wnd_lon, self.wnd_lat, wnds_t[x].transpose('lat','lon'))[2] for x in range(len(var_Mean))]
+
+            distance_grid = util.haversine(clat, clon, self.wind_lat_grid, self.wind_lon_grid)
+            mask = distance_grid <= namelist.rwind
        
-        wnds_at_time = [wnd_Mean[x].sel(time=ct, method='nearest') for x in range(len(var_Mean))]
-        wnds = np.array([wnds_at_time[x].where(mask).mean(dim=['lat', 'lon']).values.item() for x in range(len(wnds_at_time))])
+            wnds = np.array([wnds_b[x].where(mask).mean(dim=['lat', 'lon']).values.item() for x in range(len(wnds_b))])
+        else:
+            wnd_Mean = env_wind.read_env_wnd_fn(self.fn_wnd_stat)
+            var_Mean = env_wind.wind_mean_vector_names()
+
+            wnds = np.array([wnd_Mean[x].sel(lon=clon, lat=clat, time=ct, method='nearest').item() for x in range(len(var_Mean))])
+
         return wnds
     
     """ Generate the random Fourier Series """
