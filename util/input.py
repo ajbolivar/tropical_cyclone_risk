@@ -93,23 +93,14 @@ def get_trackid_key():
 def get_time_key():
     return namelist.gen_var_keys['time']
     
-def get_year_key():
-    return namelist.gen_var_keys['year']
-    
-def get_month_key():
-    return namelist.gen_var_keys['month']
-    
-def get_day_key():
-    return namelist.gen_var_keys['day']
-    
-def get_hour_key():
-    return namelist.gen_var_keys['hour']
-    
 def get_genlon_key():
     return namelist.gen_var_keys['lon']
     
 def get_genlat_key():
     return namelist.gen_var_keys['lat']
+
+def get_wind_key():
+    return namelist.gen_var_keys['wind']
 
 def load_sst(ct_start = None, ct_end = None):
     return _load_var(get_sst_key(), ct_start, ct_end)
