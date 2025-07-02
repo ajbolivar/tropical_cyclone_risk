@@ -24,8 +24,11 @@ def get_env_wnd_fn(year = 999):
 """
 Generates variable names in the monthly mean wind vector.
 """
-def wind_mean_vector_names():
-    p_lvls = namelist.steering_levels
+def wind_mean_vector_names(shear=True):
+    if shear:
+        p_lvls = namelist.shear_levels
+    else:
+        p_lvls = namelist.steering_levels
     var_names = sum([['ua%s' % x, 'va%s' % x] for x in p_lvls], [])
     var_Mean = [x + '_Mean' for x in var_names]
     return var_Mean
@@ -52,11 +55,11 @@ which is assumed to be a 2-D array of dimensions (time, nWLvl).
 Used to generate deep-layer shear.
 """
 def deep_layer_winds(env_wnds):
-    var_names = wind_mean_vector_names()
-    u250 = env_wnds[:, var_names.index(f'ua{namelist.steering_levels[0]}_Mean')]
-    v250 = env_wnds[:, var_names.index(f'va{namelist.steering_levels[0]}_Mean')]
-    u850 = env_wnds[:, var_names.index(f'ua{namelist.steering_levels[1]}_Mean')]
-    v850 = env_wnds[:, var_names.index(f'va{namelist.steering_levels[1]}_Mean')]
+    var_names = wind_mean_vector_names(shear=True)
+    u250 = env_wnds[:, var_names.index(f'ua{namelist.shear_levels[0]}_Mean')]
+    v250 = env_wnds[:, var_names.index(f'va{namelist.shear_levels[0]}_Mean')]
+    u850 = env_wnds[:, var_names.index(f'ua{namelist.shear_levels[1]}_Mean')]
+    v850 = env_wnds[:, var_names.index(f'va{namelist.shear_levels[1]}_Mean')]
     return (u250, v250, u850, v850)
 
 """

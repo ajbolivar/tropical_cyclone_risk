@@ -193,7 +193,7 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
     gamma must vary with time as well (Equation 7).
     Potential intensity (v_p) also varies with time.
     """
-    def _dvdt(self, clon, clat, v, m, v_trans, env_wnds, t, new_dt):
+    def _dvdt(self, clon, clat, v, m, v_trans, t, new_dt):
         v_pot = self._get_current_vpot(clon, clat, new_dt)
         alpha = self._calc_alpha(clon, clat, v_trans, v, new_dt)
         gamma = self._calc_gamma(alpha)
@@ -257,12 +257,12 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
             new_dt = None
             
         steering_coefs = self._calc_steering_coefs(y[2])
-        v_bam, env_wnds = self._step_bam_track(y[0], y[1], t, steering_coefs)
+        v_bam, env_wnds, env_wnds_shr = self._step_bam_track(y[0], y[1], t, steering_coefs)
         dLondt = v_bam[0] / constants.earth_R * 180. / np.pi / (np.cos(y[1] * np.pi / 180.))
         dLatdt = v_bam[1] / constants.earth_R * 180. / np.pi
 
-        dvdt = self._dvdt(y[0], y[1], y[2], y[3], v_bam, env_wnds, t, new_dt)
-        dmdt = self._dmdt(y[0], y[1], y[2], y[3], env_wnds, t, new_dt)
+        dvdt = self._dvdt(y[0], y[1], y[2], y[3], v_bam, t, new_dt)
+        dmdt = self._dmdt(y[0], y[1], y[2], y[3], env_wnds_shr, t, new_dt)
         vpot = self._get_current_vpot(y[0], y[1], new_dt)
         chi  = self._calc_chi(y[0], y[1], new_dt)
         # AJB: dump info along track
@@ -338,7 +338,7 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
         if namelist.thermo_ts == 'sub-monthly':
             self.reinit_fields(lon, lat, chi, vpot)
         # If the ventilation index is above some threshold, do not integrate.
-        S = self._calc_S(self._env_winds(clon, clat, 0))
+        S = self._calc_S(self._env_winds(clon, clat, 0, False))
         vpot = self._get_current_vpot(clon, clat, self.gen_dt)
         chi = self._calc_chi(clon, clat, self.gen_dt)
 

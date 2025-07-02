@@ -5,9 +5,9 @@ Namelist file that serves as the configuration file for the TC-risk model.
 """
 ########################## File System Parameters ###########################
 src_directory = os.path.dirname(os.path.abspath(__file__))
-base_directory = '/path/to/input/dir'
-output_directory = '/path/to/output/dir'
-exp_name = 'exp'
+base_directory = '/glade/derecho/scratch/abolivar/tc_risk/input/ERA5/sub-monthly/1deg'
+output_directory = '/glade/campaign/univ/upsu0068/output/ERA5/6-hourly/second_run/vr/sub-monthly_thermo/5d_rm_0.8_v2'
+exp_name = '1980-2021_Vbar_Spoint_med'
 debug = True
 # For now, we support either 'GCM' or 'ERA5'. Different file types and variable
 # names can be added by modifying the "input.py" file and adding the appropriate
@@ -72,7 +72,7 @@ Cd = 1.2e-3
 select_thermo = 1   # 1 for pseudoadiabatic, 2 for reversible thermodynamics
 select_interp = 2   # 1 for computation, 2 for interpolation
 chi_radius = False
-wind_radius = False
+wind_radius = True
 rwind = 1000
 
 """
@@ -83,15 +83,16 @@ These parameters configure track and intensity constants.
 # If 250-, 500-, and 850-hPa, uses three steering levels.
 # The steering_coefficients ('steering_coefs') should have the same 
 # length as the number of levels.
-steering_levels = [200, 850]
+steering_levels = [500, 850]
 steering_coefs = [0.2, 0.8]           # constant steering coefficients if not coupled
-coupled_track = True                  # track coupled to intensity; overrides alpha
+shear_levels = [250, 850]
+coupled_track = False                 # track coupled to intensity; overrides alpha
 y_alpha = [0.17, 0.83]                # value of steering coefficient at 0 knots
 m_alpha = [0.0025, -0.0025]           # change of each coefficient per unit storm intensity, 1 / kts
 alpha_max = [0.41, 0.78]              # maximum value of each steering coefficient (coupled track only)
 alpha_min = [0.22, 0.59]              # minimum value of each steering coefficient (coupled track only)
-u_beta = 0                            # zonal beta drift, m/s
-v_beta = 0                            # meridional beta drift, m/s
+u_beta = -1                           # zonal beta drift, m/s
+v_beta = 2.5                          # meridional beta drift, m/s
 T_days = 20                           # period of the fourier series, days
 seed_v_init_ms = 5                    # initial seed v intensity, m/s
 seed_v_2d_threshold_ms = 6.5          # seed v threshold after 2 days, m/s

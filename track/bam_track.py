@@ -61,6 +61,7 @@ class BetaAdvectionTrack:
         self.dt_start = dt_start
         self.basin = basin
         self.var_names = env_wind.wind_mean_vector_names()
+        self.shear_var_names = env_wind.wind_mean_vector_names(shear=True)
         self.u_Mean_idxs = np.zeros(self.nLvl).astype(int)
         self.v_Mean_idxs = np.zeros(self.nLvl).astype(int)
 
@@ -123,10 +124,11 @@ class BetaAdvectionTrack:
         return(wnd_mean, wnd_cov)
 
     """ Query env_wnd file for nearest 6-hourly winds """
-    def query_wnd_nearest(self, clon, clat, ct):
-        if namelist.wind_radius:
-            wnd_Mean = env_wind.read_env_wnd_fn(self.fn_wnd_stat)
-            var_Mean = env_wind.wind_mean_vector_names()
+    def query_wnd_nearest(self, clon, clat, ct, area_avg, shear):
+        wnd_Mean = env_wind.read_env_wnd_fn(self.fn_wnd_stat)
+        var_Mean = self.shear_var_names if shear else self.var_names
+
+        if area_avg:
             wnds_t = [wnd_Mean[x].sel(time=ct, method='nearest').squeeze() for x in range(len(var_Mean))]
             wnds_b = [self.basin.transform_global_field(self.wnd_lon, self.wnd_lat, wnds_t[x].transpose('lat','lon'))[2] for x in range(len(var_Mean))]
 
@@ -134,10 +136,8 @@ class BetaAdvectionTrack:
             mask = distance_grid <= namelist.rwind
        
             wnds = np.array([wnds_b[x].where(mask).mean(dim=['lat', 'lon']).values.item() for x in range(len(wnds_b))])
+        
         else:
-            wnd_Mean = env_wind.read_env_wnd_fn(self.fn_wnd_stat)
-            var_Mean = env_wind.wind_mean_vector_names()
-
             wnds = np.array([wnd_Mean[x].sel(lon=clon, lat=clat, time=ct, method='nearest').item() for x in range(len(var_Mean))])
 
         return wnds
@@ -148,7 +148,7 @@ class BetaAdvectionTrack:
         return(gen_f(N_series, self.T_Fs, self.t_s, self.nWLvl))
 
     """ Calculate environmental winds at a point and time. """
-    def _env_winds(self, clon, clat, ts):
+    def _env_winds(self, clon, clat, ts, area_avg=False, shear=False):
         if np.isnan(clon) or np.isnan(ts):
             return np.zeros(self.nWLvl)
 
@@ -164,7 +164,7 @@ class BetaAdvectionTrack:
             return wnds
 
         elif namelist.wind_ts == '6-hourly':
-            wnds = self.query_wnd_nearest(clon, clat, ct)
+            wnds = self.query_wnd_nearest(clon, clat, ct, area_avg, shear)
             return wnds
 
     """ Calculate the translational speeds from the beta advection model """
@@ -173,7 +173,8 @@ class BetaAdvectionTrack:
         # Ensures that solve_ivp does not go past the domain bounds.
         if np.abs(clat) >= 80:
             return (np.zeros(2), np.zeros(self.nWLvl))
-        wnds = self._env_winds(clon, clat, ts)
+        wnds = self._env_winds(clon, clat, ts, namelist.wind_radius)
+        wnds_shr = self._env_winds(clon, clat, ts, False, True)
 
         v_bam = np.zeros(2)
         w_lat = np.cos(np.deg2rad(clat))
@@ -182,7 +183,7 @@ class BetaAdvectionTrack:
         v_bam[0] = np.dot(wnds[self.u_Mean_idxs], steering_coefs) + self.u_beta * w_lat
         v_bam[1] = np.dot(wnds[self.v_Mean_idxs], steering_coefs) + v_beta_sgn * w_lat
 
-        return(v_bam, wnds)
+        return(v_bam, wnds, wnds_shr)
 
     """ Calculate the steering coefficients. """
     def _calc_steering_coefs(self):
