@@ -11,6 +11,7 @@ import glob
 import namelist
 import numpy as np
 import xarray as xr
+import pandas as pd
 
 from util import input, mat
 from thermo import thermo
@@ -40,6 +41,20 @@ def compute_thermo(dt_start, dt_end):
     lat_ky = input.get_lat_key()
     sst_ky = input.get_sst_key()
     
+    # Check to make sure all necessary timesteps of t, sst, psl, and q are available for
+    # computation of thermodynamic quantities
+    for ds in [ds_sst, ds_psl, ds_ta, ds_hus]:
+        nTime = len(ds['time'])
+
+        if namelist.thermo_ts == 'sub_monthly':
+            if nTime < 365:
+                print(f'Error! Data should be length 365 but is instead length {nTime}. Please check your input data to ensure you have all necessary timesteps of thermodynamic data available for calculations.')
+                return
+        if namelist.thermo_ts == 'monthly':
+            if nTime < 12:
+                print(f'Error! Data should be length 12 but is instead length {nTime}. Please check your input data to ensure you have all necessary timesteps of thermodynamic data available for calculations.')
+                return
+
     # Compute running means for all input variables
     if namelist.thermo_ts == 'sub-monthly':
         print('Computing running means...')
@@ -48,7 +63,6 @@ def compute_thermo(dt_start, dt_end):
         ds_ta  = running_mean_xr(ds_ta, input.get_temp_key(), 'time', namelist.window)
         ds_hus = running_mean_xr(ds_hus, input.get_sp_hum_key(), 'time', 31)
 
-    nTime = len(ds_sst['time'])
     vmax = np.zeros(ds_psl[input.get_mslp_key()].shape)
     chi = np.zeros(ds_psl[input.get_mslp_key()].shape)
     rh_mid = np.zeros(ds_psl[input.get_mslp_key()].shape)
@@ -115,14 +129,11 @@ def gen_thermo(year = 999):
     end_year = dt_end.year
     start_month = dt_start.month
     end_month = dt_end.month
-    
     ds = input.load_mslp()
-
     ct_bounds = [dt_start, dt_end]
     ds_times = input.convert_from_datetime(ds,
                    np.array([x for x in input.convert_to_datetime(ds, ds['time'].values)
                              if x >= ct_bounds[0] and x <= ct_bounds[1]]))
-        
     # If specific thermo file does not exist but data is contained in larger thermo file,
     # save subset of data from larger file.
     if glob.glob('%s/thermo*.nc' % namelist.output_directory):
@@ -162,6 +173,7 @@ def gen_thermo(year = 999):
     vmax = np.concatenate([x[0] for x in out], axis = 0)
     chi = np.concatenate([x[1] for x in out], axis = 0)
     rh_mid = np.concatenate([x[2] for x in out], axis = 0)
+    
     ds_thermo = xr.Dataset(data_vars = dict(vmax = (['time', 'lat', 'lon'], vmax),
                                             chi = (['time', 'lat', 'lon'], chi),
                                             rh_mid = (['time', 'lat', 'lon'], rh_mid)),
