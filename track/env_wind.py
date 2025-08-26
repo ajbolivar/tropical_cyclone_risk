@@ -24,7 +24,7 @@ def get_env_wnd_fn(year = 999):
 """
 Generates variable names in the monthly mean wind vector.
 """
-def wind_mean_vector_names(shear=True):
+def wind_mean_vector_names(shear=False):
     if shear:
         p_lvls = namelist.shear_levels
     else:
@@ -56,17 +56,17 @@ Used to generate deep-layer shear.
 """
 def deep_layer_winds(env_wnds):
     var_names = wind_mean_vector_names(shear=True)
-    u250 = env_wnds[:, var_names.index(f'ua{namelist.shear_levels[0]}_Mean')]
-    v250 = env_wnds[:, var_names.index(f'va{namelist.shear_levels[0]}_Mean')]
-    u850 = env_wnds[:, var_names.index(f'ua{namelist.shear_levels[1]}_Mean')]
-    v850 = env_wnds[:, var_names.index(f'va{namelist.shear_levels[1]}_Mean')]
-    return (u250, v250, u850, v850)
+    uupper = env_wnds[:, var_names.index(f'ua{namelist.shear_levels[0]}_Mean')]
+    vupper = env_wnds[:, var_names.index(f'va{namelist.shear_levels[0]}_Mean')]
+    ulower = env_wnds[:, var_names.index(f'ua{namelist.shear_levels[1]}_Mean')]
+    vlower = env_wnds[:, var_names.index(f'va{namelist.shear_levels[1]}_Mean')]
+    return (uupper, vupper, ulower, vlower)
 
 """
 Read the mean and covariance of the upper/lower level zonal and meridional winds.
 """
-def read_env_wnd_fn(fn_wnd_stat, dt_s = None, dt_e = None):
-    var_Mean = wind_mean_vector_names()
+def read_env_wnd_fn(fn_wnd_stat, shear=False, dt_s = None, dt_e = None):
+    var_Mean = wind_mean_vector_names(shear)
     var_Var = wind_cov_matrix_names()
     if dt_s is None:
         if (namelist.gnu_parallel) and (namelist.wind_ts == 'monthly'): ds = xr.open_mfdataset(fn_wnd_stat)

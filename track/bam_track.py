@@ -125,9 +125,8 @@ class BetaAdvectionTrack:
 
     """ Query env_wnd file for nearest 6-hourly winds """
     def query_wnd_nearest(self, clon, clat, ct, area_avg, shear):
-        wnd_Mean = env_wind.read_env_wnd_fn(self.fn_wnd_stat)
+        wnd_Mean = env_wind.read_env_wnd_fn(self.fn_wnd_stat, shear=shear)
         var_Mean = self.shear_var_names if shear else self.var_names
-
         if area_avg:
             wnds_t = [wnd_Mean[x].sel(time=ct, method='nearest').squeeze() for x in range(len(var_Mean))]
             wnds_b = [self.basin.transform_global_field(self.wnd_lon, self.wnd_lat, wnds_t[x].transpose('lat','lon'))[2] for x in range(len(var_Mean))]
@@ -148,9 +147,9 @@ class BetaAdvectionTrack:
         return(gen_f(N_series, self.T_Fs, self.t_s, self.nWLvl))
 
     """ Calculate environmental winds at a point and time. """
-    def _env_winds(self, clon, clat, ts, area_avg=False, shear=False):
+    def _env_winds(self, clon, clat, ts):
         if np.isnan(clon) or np.isnan(ts):
-            return np.zeros(self.nWLvl)
+            return np.zeros(self.nWLvl), np.zeros(self.nWLvl)
 
         ct = self.datetime_start + datetime.timedelta(seconds = ts)
         
@@ -159,30 +158,29 @@ class BetaAdvectionTrack:
             try:
                 wnd_A = np.linalg.cholesky(wnd_cov)
             except np.linalg.LinAlgError as err:
-                return np.zeros(self.nWLvl)
+                return np.zeros(self.nWLvl), np.zeros(self.nWLvl)
+            # TODO: add support for different shear and steering layers for monthly winds
             wnds = wnd_mean + np.matmul(wnd_A, self.Fs_i(ts))
-            return wnds
+            return wnds, wnds
 
         elif namelist.wind_ts == '6-hourly':
-            wnds = self.query_wnd_nearest(clon, clat, ct, area_avg, shear)
-            return wnds
+            wnds = self.query_wnd_nearest(clon, clat, ct, area_avg=namelist.wind_radius, shear=False)
+            wnds_shr = self.query_wnd_nearest(clon, clat, ct, area_avg=False, shear=True)
+            return wnds, wnds_shr
 
     """ Calculate the translational speeds from the beta advection model """
     def _step_bam_track(self, clon, clat, ts, steering_coefs):
         # Include a hard stop for latitudes above 80 degrees.
         # Ensures that solve_ivp does not go past the domain bounds.
         if np.abs(clat) >= 80:
-            return (np.zeros(2), np.zeros(self.nWLvl))
-        wnds = self._env_winds(clon, clat, ts, namelist.wind_radius)
-        wnds_shr = self._env_winds(clon, clat, ts, False, True)
+            return (np.zeros(2), np.zeros(self.nWLvl), np.zeros(self.nWLvl))
+        wnds, wnds_shr = self._env_winds(clon, clat, ts)
 
         v_bam = np.zeros(2)
         w_lat = np.cos(np.deg2rad(clat))
         v_beta_sgn = np.sign(clat) * self.v_beta
-
         v_bam[0] = np.dot(wnds[self.u_Mean_idxs], steering_coefs) + self.u_beta * w_lat
         v_bam[1] = np.dot(wnds[self.v_Mean_idxs], steering_coefs) + v_beta_sgn * w_lat
-
         return(v_bam, wnds, wnds_shr)
 
     """ Calculate the steering coefficients. """
@@ -199,7 +197,7 @@ class BetaAdvectionTrack:
         # Create the weights for the beta-advection model (across time).
         self.Fs = self.gen_synthetic_f()
         self.Fs_i = interp1d(self.t_s, self.Fs, axis = 1)
-
+        
         track = np.full((self.total_steps+1, 2), np.nan)
         wind_track = np.full((self.total_steps, self.nWLvl), np.nan)
         v_trans_track = np.full((self.total_steps, 2), np.nan)

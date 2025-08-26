@@ -9,6 +9,7 @@ import calendar
 import numpy as np
 import os
 import sys
+import glob
 import xarray as xr
 import time
 import pandas as pd
@@ -52,25 +53,11 @@ def create_yearly_files(year = 999):
         yearS = int(year)
         yearE = int(year)
 
-    try:
-        csv = pd.read_csv(namelist.gen_points,
-                          usecols=[input.get_trackid_key(),input.get_year_key(),input.get_month_key(),
-                                   input.get_day_key(),input.get_hour_key(),input.get_genlon_key(),
-                                   input.get_genlat_key()], delimiter=',')
-    except:
-        csv = pd.read_csv(namelist.gen_points,
-                          usecols=[input.get_trackid_key(),input.get_time_key(),
-                                   input.get_genlon_key(),input.get_genlat_key()], delimiter=',')
-
-        # Ensure time is in datetime format
-        dt_time = pd.to_datetime(csv[input.get_time_key()])
-        # Extract year, month, day, and hour from time
-        csv[input.get_year_key()] = dt_time.dt.year
-        csv[input.get_month_key()] = dt_time.dt.month
-        csv[input.get_day_key()] = dt_time.dt.day
-        csv[input.get_hour_key()] = dt_time.dt.hour
-        # Drop time column before saving
-        csv = csv.drop(input.get_time_key(),axis=1)
+    csv = pd.read_csv(namelist.gen_points, usecols=[input.get_trackid_key(), 
+                                                    input.get_time_key(), 
+                                                    input.get_genlon_key(), 
+                                                    input.get_genlat_key()], delimiter=',',
+                      parse_dates=[input.get_time_key()])
 
     # Make sure longitudes are in 0-360 form
     csv[input.get_genlon_key()] = csv[input.get_genlon_key()] % 360
@@ -92,7 +79,7 @@ def create_yearly_files(year = 999):
             continue
         
         # Keep only the genesis point of each storm
-        csv_yr = csv.loc[csv[input.get_year_key()] == year].drop_duplicates(subset=[input.get_trackid_key()])
+        csv_yr = csv.loc[csv[input.get_time_key()].dt.year == year].drop_duplicates(subset=[input.get_trackid_key()])
         csv_yr.to_csv(fn_out)
 
 """
@@ -160,7 +147,7 @@ def seed_to_datetime(year, time_seed):
 Loads a pickle file containing coupled_fast object.
 """
 def load_cpl_fast(year, idx):
-    pickle_file = f"{namelist.output_directory}/pickle_files/cpl_fast_{year}_{idx}.pkl"
+    pickle_file = f"{namelist.output_directory}/{namelist.exp_name}/pickle_files/cpl_fast_{year}_{idx}.pkl"
     if os.path.exists(pickle_file):
         with open(pickle_file, 'rb') as f:
             return pickle.load(f)
@@ -180,6 +167,8 @@ def run_tracks(year, n_tracks, b):
     else: fn_th = calc_thermo.get_fn_thermo()
         
     ds = xr.open_dataset(fn_th)
+    ds['lon'] = ((ds['lon'] + 360) % 360) # Make sure lons are in 0-360
+    ds = ds.sortby('lon')
     dt_year_start = datetime.datetime(year-1, 12, 31)
     dt_year_end = datetime.datetime(year, 12, 31)
     dt_bounds = input.convert_from_datetime(ds, [dt_year_start, dt_year_end])
@@ -214,10 +203,18 @@ def run_tracks(year, n_tracks, b):
 
     # Overwrite n_tracks with number of seeds/year if seeding is set to 'manual'
     if namelist.seeding == 'manual':
-        seed_info = pd.read_csv('%s/gen_points_%s_%d01_%d12.csv' % (namelist.output_directory, namelist.exp_prefix, 
+        print('%s/gen_points_%s_%d01_%d12.csv' % (namelist.output_directory, 
+                                                                    namelist.exp_prefix, 
                                                                     year, year))
+
+        seed_info = pd.read_csv('%s/gen_points_%s_%d01_%d12.csv' % (namelist.output_directory, 
+                                                                    namelist.exp_prefix, 
+                                                                    year, year),
+                                parse_dates=[input.get_time_key()])
+
+        seed_info[input.get_genlon_key()] = seed_info[input.get_genlon_key()] % 360
         if seed_info.empty:
-            print(f'No seed information found for {year}. Skipping')
+            print(f'No seed information found for {year}. Skipping...')
             return
             
         lon_check = seed_info[input.get_genlon_key()].between(b_bounds[0], b_bounds[2])
@@ -266,35 +263,33 @@ def run_tracks(year, n_tracks, b):
 
         dates = [start_date + i * interval for i in range(int((end_date - start_date) / interval) + 1)
                  if (((start_date + i * interval).month != 2) or (((start_date + i * interval).day) != 29))]
-        
+         
         if namelist.debug: print(f'Initializing CoupledFAST objects...')
         sys.stdout.flush()
 
         # If seeding manually, only initialize timesteps that are needed
         if namelist.seeding == 'manual':
-            indices = [
-                      dates.index(datetime.datetime(y, m, d, h))
-                      for y, m, d, h in zip(seed_info.year, seed_info.month, seed_info.day, seed_info.hour)
-                      ]
+            indices = [dates.index(dt) for dt in seed_info[input.get_time_key()].dt.to_pydatetime()]
             idxs = np.unique(indices)
         else:
             idxs = range(0, 1460)
-        # AJB: uncomment line 256 and change second number to test a single timestep
+        
+        # AJB: uncomment the line below and change second number to test a single timestep
         # AJB: i = 0 is kept because it is referenced in many places
         # AJB: this saves time by only initializing cpl_fast over two timesteps
-        # idxs = [0, 934]
+        # idxs = [0, 1260]
         # idxs = [0] + list(range(604, 1336))
         
         for i in idxs:
             dt_6hr = dates[i]
             ds_dt_6hr = input.convert_from_datetime(ds_wnd, [dt_6hr])[0]
-            print(i, ds_dt_6hr)
             sys.stdout.flush()
             rh_mid_6hr = rh_mid.interp(time = ds_dt_6hr).data
             m_init_fx[i] = mat.interp2_fx(lon, lat, rh_mid_6hr)
 
-            os.makedirs(f'{namelist.output_directory}/pickle_files', exist_ok=True)
-            pickle_fn = os.path.join(namelist.output_directory, f'pickle_files/cpl_fast_{year}_{i}.pkl')
+            os.makedirs(f'{namelist.output_directory}/{namelist.exp_name}/pickle_files', exist_ok=True)
+            # Pickle cpl_fast objects to save on memory
+            pickle_fn = os.path.join(namelist.output_directory, f'{namelist.exp_name}/pickle_files/cpl_fast_{year}_{i}.pkl')
             if not os.path.exists(pickle_fn):
                 month_index = int(dt_6hr.month - 1)
                 sys.stdout.flush()
@@ -339,10 +334,9 @@ def run_tracks(year, n_tracks, b):
             gen_lon = seed_info[input.get_genlon_key()][nt]
             gen_lat = seed_info[input.get_genlat_key()][nt]
             # Use fixed non-leap year to generate time seed
-            gen_dt  = pd.to_datetime('2001' + str(seed_info[input.get_month_key()][nt]) +
-                                     str(seed_info[input.get_day_key()][nt]) +
-                                     str(seed_info[input.get_hour_key()][nt]),
-                                     format='%Y%m%d%H')
+            time = pd.to_datetime(seed_info[input.get_time_key()][nt])
+            m, d, h = time.month, time.day, time.hour
+            gen_dt  = pd.to_datetime('2001' + str(m) + str(d) + str(h), format='%Y%m%d%H')
             
             time_seed = int(((gen_dt.dayofyear - 1) * 4) + gen_dt.hour / 6) + 1
             # Put the correct year back
@@ -385,8 +379,8 @@ def run_tracks(year, n_tracks, b):
                 if namelist.wind_ts == '6-hourly':
                     # Randomly seed the 6-hour timestep.
                     time_seed = np.random.randint(1,1461)
-                    # AJB: uncomment line 335 to test a single case (+1 for consistency with his code)
-                    # time_seed = idxs[1] + 1
+                    #AJB: uncomment next line to test a single case (+1 for consistency with his code)
+                    #time_seed = idxs[1] + 1
                     # Load pickle file
                     fast = load_cpl_fast(year, time_seed - 1)
 
@@ -415,8 +409,7 @@ def run_tracks(year, n_tracks, b):
                         seed_passed = True
 
         # Set the initial value of m to a function of relative humidity.
-        v_init = namelist.seed_v_init_ms + np.random.randn(1)[0]
-        rh_init = float(m_init_fx[time_seed-1].ev(gen_lon, gen_lat))
+        v_init = namelist.seed_v_init_ms + np.random.randn(1)[0] if namelist.seeding == 'random' else seed_info[input.get_wind_key()][nt]
         rh_init = float(m_init_fx[time_seed-1].ev(gen_lon, gen_lat))
         m_init = np.maximum(0, namelist.f_mInit(rh_init))
         fast.h_bl = namelist.atm_bl_depth[basin_ids[basin_idx]]
@@ -467,7 +460,7 @@ def run_tracks(year, n_tracks, b):
             # of the time-integrated state (a parameter), we recompute it.
             # TODO: Remove this redudancy by pre-caclulating the env. wind.
             for i in range(n_time):
-                tc_env_wnds[nt, i, :] = fast._env_winds(track_lon[i], track_lat[i], fast.t_s[i])     
+                tc_env_wnds[nt, i, :] = fast._env_winds(track_lon[i], track_lat[i], fast.t_s[i])[0]     
             vmax = tc_wind.axi_to_max_wind(track_lon, track_lat, fast.dt_track,
                                             v_track, tc_env_wnds[nt, 0:n_time, :])
             
@@ -483,10 +476,16 @@ def run_tracks(year, n_tracks, b):
         seeds_df = pd.DataFrame([[gen_lat, gen_lon, time_seed, year, success]],columns=['lat', 'lon', 'month', 'year', 'success'])
         seeds_df_list.append(seeds_df)
 
+    # Remove pickle files directory
+    if namelist.wind_ts == '6-hourly':
+        files = glob.glob(f"{namelist.output_directory}/{namelist.exp_name}/pickle_files/cpl_fast_{year}*.pkl")
+        for f in files:
+            os.remove(f)
+
     # If no spatial seed info retained, create empty DataFrame
     if not seeds_df_list: seed_tries = pd.DataFrame(columns=['lat', 'lon', 'month', 'year', 'success'])
     else: seed_tries = pd.concat(seeds_df_list)
-
+    
     return((tc_lon, tc_lat, tc_v, tc_m, tc_vpot, tc_chi, tc_vmax, tc_env_wnds, tc_month, tc_basin, n_seeds, seed_tries))
 
 """
@@ -552,10 +551,10 @@ def run_downscaling(basin_id, year = None, jobid = ''):
 
     ds = xr.Dataset(data_vars = dict(lon_trks = (["n_trk", "time"], tc_lon),
                                      lat_trks = (["n_trk", "time"], tc_lat),
-                                     u250_trks = (["n_trk", "time"], tc_env_wnds[:, :, 0]),
-                                     v250_trks = (["n_trk", "time"], tc_env_wnds[:, :, 1]),
-                                     u850_trks = (["n_trk", "time"], tc_env_wnds[:, :, 2]),
-                                     v850_trks = (["n_trk", "time"], tc_env_wnds[:, :, 3]),
+                                     u_upper_trks = (["n_trk", "time"], tc_env_wnds[:, :, 0]),
+                                     v_upper_trks = (["n_trk", "time"], tc_env_wnds[:, :, 1]),
+                                     u_lower_trks = (["n_trk", "time"], tc_env_wnds[:, :, 2]),
+                                     v_lower_trks = (["n_trk", "time"], tc_env_wnds[:, :, 3]),
                                      v_trks = (["n_trk", "time"], tc_v),
                                      m_trks = (["n_trk", "time"], tc_m),
                                      vpot_trks = (["n_trk", "time"], tc_vpot),
