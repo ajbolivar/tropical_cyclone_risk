@@ -10,6 +10,7 @@ import xarray as xr
 from datetime import timedelta
 from scipy.integrate import solve_ivp
 from scipy.interpolate import interp1d, RectBivariateSpline
+from types import SimpleNamespace
 import warnings
 import logging
 
@@ -34,6 +35,90 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
         self.f_bath = geo.read_bathy(basin)
         self.f_land = geo.read_land(basin)
         self.debug = False
+
+    """ Fixed-step RK4 with optional constant subcycling. Keeps
+        BFB determinism for a given (dt, substeps)"""
+    def rk4(self, fun, t_span, y0, dt, event=None, args=(), substeps=1):
+        t0, tf = float(t_span[0]), float(t_span[1])
+        y = np.array(y0, dtype=np.float64, copy=True)
+        n = y.size
+    
+        # Build macro time grid; truncate last step exactly to tf.
+        n_full = int(max(0, np.floor((tf - t0) / dt)))
+        remainder = (tf - t0) - n_full * dt
+        times = [t0 + k * dt for k in range(n_full + 1)]
+        if remainder > 0:
+            times.append(tf)
+        T = np.array(times, dtype=np.float64)
+    
+        Y = np.empty((n, T.size), dtype=np.float64)
+        Y[:, 0] = y
+    
+        have_event = event is not None
+        t_events, y_events = [], []
+        status, message = 0, "Integration completed."
+    
+        def g(t, y):
+            return float(event(t, y, *args))
+    
+        g_prev = g(T[0], Y[:, 0]) if have_event else None
+    
+        # RK4 stepper with step size h
+        def rk4_step(t, y, h):
+            k1 = np.asarray(fun(t,           y,             *args), dtype=np.float64)
+            k2 = np.asarray(fun(t + 0.5*h,   y + 0.5*h*k1,  *args), dtype=np.float64)
+            k3 = np.asarray(fun(t + 0.5*h,   y + 0.5*h*k2,  *args), dtype=np.float64)
+            k4 = np.asarray(fun(t + h,       y + h*k3,      *args), dtype=np.float64)
+            return y + (h/6.0)*(k1 + 2.0*k2 + 2.0*k3 + k4)
+    
+        for i in range(1, T.size):
+            t_prev, t_macro = T[i-1], T[i]
+            H = t_macro - t_prev                      # macro interval (may be shorter on last step)
+            s = int(substeps)
+            h = H / s                                 # inner step
+    
+            t = t_prev
+            y_start = y
+    
+            # Inner loop (constant substeps)
+            for j in range(s):
+                y_next = rk4_step(t, y, h)
+                t_next = t + h
+    
+                # Event check at inner substeps (sign change or exact zero)
+                if have_event:
+                    g_next = g(t_next, y_next)
+                    if g_prev == 0.0 or g_next == 0.0 or (g_prev < 0.0) != (g_next < 0.0):
+                        # Linear locate within [t, t_next] (deterministic)
+                        alpha = 0.0 if g_next == g_prev else (-g_prev / (g_next - g_prev))
+                        alpha = 0.0 if not np.isfinite(alpha) else min(max(alpha, 0.0), 1.0)
+                        t_zero = t + alpha*h
+                        y_zero = y + alpha*(y_next - y)
+    
+                        t_events.append(t_zero)
+                        y_events.append(y_zero.copy())
+    
+                        if getattr(event, "terminal", False):
+                            status, message = 1, "Terminated by event."
+                            T = np.concatenate([T[:i], np.array([t_zero])])
+                            Y = np.concatenate([Y[:, :i], y_zero.reshape(n, 1)], axis=1)
+                            return SimpleNamespace(
+                                t=T, y=Y,
+                                t_events=[np.array(t_events, dtype=np.float64)],
+                                y_events=[np.stack(y_events, axis=0)],
+                                status=status, success=True, message=message
+                            )
+                    g_prev = g_next
+
+                y, t = y_next, t_next
+    
+            Y[:, i] = y
+    
+        return SimpleNamespace(t=T, y=Y,
+                               t_events=[np.array(t_events, dtype=np.float64)] if have_event else [],
+                               y_events=[np.stack(y_events, axis=0)] if (have_event and y_events) else [],
+                               status=status, success=True, message=message,
+                               )
 
     """ Return if over land (True) or ocean (False) """
     def _get_over_land(self, clon, clat):
@@ -65,7 +150,6 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
                     # Convert `new_dt` to a compatible format (if it's not already a datetime object)
                     if not isinstance(new_dt, pd.Timestamp):
                         new_dt = pd.to_datetime(new_dt)
-                    
                     # Calculate the time differences and find the nearest index
                     time_diffs = list(abs(new_dt - pd.to_datetime(self.times.astype(str))).total_seconds())
                     nearest_idx = time_diffs.index(min(time_diffs))
@@ -135,11 +219,11 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
     """ Calculate the shear vector from a vector of environmental winds.
         The shear vector is [zonal shear, meridional shear]."""
     def _calc_env_wnd_to_shr(self, env_wnds):
-        u250, v250, u850, v850 = env_wind.deep_layer_winds(np.expand_dims(env_wnds, axis = 0))
-        shr = np.array([u250 - u850, v250 - v850]).flatten()
+        uupper, vupper, ulower, vlower = env_wind.deep_layer_winds(np.expand_dims(env_wnds, axis = 0))
+        shr = np.array([uupper - ulower, vupper - vlower]).flatten()
         return shr
 
-    """ Calculate the magnitude of the 250-850 hPa environmental wind shear."""
+    """ Calculate the magnitude of the environmental wind shear."""
     def _calc_S(self, env_wnds):
         return np.linalg.norm(self._calc_env_wnd_to_shr(env_wnds))
 
@@ -157,14 +241,14 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
 
                     distances = util.haversine(clat, clon, self.basin_lat_grid, self.basin_lon_grid)
 
-                    mask = distances <= 300 # Radius in km
+                    mask = distances <= namelist.rchi # Radius in km
 
                     chi_field = self.chi_fields[nearest_idx]
 
                     chi_local = chi_field[mask]
-                    chi_95 = np.percentile(chi_local, 95)
+                    chi_90 = np.nanpercentile(chi_local, 90)
 
-                    return chi_95
+                    return chi_90
 
                 else:
                     time_diffs = list(abs(new_dt - pd.to_datetime(self.times.astype(str))).total_seconds())
@@ -248,7 +332,7 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
 
     """ Time-derivative of the state vector, y.
     y[0] is longitude, y[1] is latitude, y[2] is v, and y[3] is m."""
-    def dydt(self, t, y):   
+    def dydt(self, t, y):
         if self.gen_dt is not None:
             new_dt = self.gen_dt + timedelta(seconds = t)
             if new_dt.strftime('%m%d') == '0229': 
@@ -257,6 +341,7 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
             new_dt = None
             
         steering_coefs = self._calc_steering_coefs(y[2])
+        steering_coefs = np.array([0.2, 0.8])
         v_bam, env_wnds, env_wnds_shr = self._step_bam_track(y[0], y[1], t, steering_coefs)
         dLondt = v_bam[0] / constants.earth_R * 180. / np.pi / (np.cos(y[1] * np.pi / 180.))
         dLatdt = v_bam[1] / constants.earth_R * 180. / np.pi
@@ -266,8 +351,7 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
         vpot = self._get_current_vpot(y[0], y[1], new_dt)
         chi  = self._calc_chi(y[0], y[1], new_dt)
         # AJB: dump info along track
-        print(f'time, lon, lat, v, m , pi, chi: {new_dt}, {y[0]}, {y[1]}, {y[2]}, {y[3]}, {vpot}, {chi}')
-        
+        #print(f'time, lon, lat, v, m , pi, chi: {new_dt}, {y[0]}, {y[1]}, {y[2]}, {y[3]}, {vpot}, {chi}')
         if self.debug:
             return(np.array([0, 0, dvdt, dmdt]))
         else:
@@ -306,7 +390,6 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
         self.times = chi.time.values # array of datetimes
         chi_fields = []  # Store transformed chi fields
         
-        print('Reinitializing fields...')
         for i in range(0, len(self.times)):
             lon_b, lat_b, chi_b = self.basin.transform_global_field(lon, lat, chi.isel(time = i).data)
             _, _, vpot_b = self.basin.transform_global_field(lon, lat, vpot.isel(time = i).data)
@@ -322,6 +405,7 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
         self.chi_fields = chi_fields
         self.f_chi = f_chi
         self.f_vpot = f_vpot
+        self.lon_b, self.lat_b = lon_b, lat_b
         self.basin_lat_grid, self.basin_lon_grid = np.meshgrid(lat_b, lon_b, indexing='ij')
 
     """ Generate a track with an initial position of (clon, clat),
@@ -333,12 +417,11 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
         # Create the weights for the beta-advection model (across time).
         self.Fs = self.gen_synthetic_f()
         self.Fs_i = interp1d(self.t_s, self.Fs, axis = 1)
-
         # If sub-monthly chi/vpot supplied, reinitialize those variables as time arrays
         if namelist.thermo_ts == 'sub-monthly':
             self.reinit_fields(lon, lat, chi, vpot)
         # If the ventilation index is above some threshold, do not integrate.
-        S = self._calc_S(self._env_winds(clon, clat, 0, False))
+        S = self._calc_S(self._env_winds(clon, clat, 0)[1])
         vpot = self._get_current_vpot(clon, clat, self.gen_dt)
         chi = self._calc_chi(clon, clat, self.gen_dt)
 
@@ -366,8 +449,21 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
         else:
             m_init = m
 
-        res = solve_ivp(fun = self.dydt, t_span = (0, self.total_time), y0 = np.asarray([clon, clat, v, m_init]),
-                        t_eval = np.linspace(0, self.total_time, self.total_steps),
-                        events = tc_dissipates, max_step = 86400, dense_output=True)
+        
+        if namelist.integration_method == 'RK4':
+            res = self.rk4(fun = self.dydt, 
+                           t_span = (0, self.total_time), 
+                           y0 = np.asarray([clon, clat, v, m_init], dtype=np.float64), 
+                           dt = self.total_time / (self.total_steps - 1), event = tc_dissipates, 
+                           substeps = 1)
+
+        elif namelist.integration_method == 'RK45':
+            res = solve_ivp(fun = self.dydt, 
+                            t_span = (0, self.total_time), 
+                            y0 = np.asarray([clon, clat, v, m_init]),
+                            t_eval = np.linspace(0, self.total_time, self.total_steps),
+                            events = tc_dissipates, max_step = 86400, dense_output=True)
+        else:
+            raise ValueError("Invalid integration method specified. Options: 'RK4', 'RK45'")
 
         return res
