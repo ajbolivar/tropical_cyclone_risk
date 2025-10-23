@@ -14,13 +14,14 @@ import xarray as xr
 import time
 import pandas as pd
 import pickle
+import matplotlib.pyplot as plt
 
 import namelist
 from intensity import coupled_fast, ocean
 from thermo import calc_thermo
 from track import env_wind
 from wind import tc_wind
-from util import basins, input, mat
+from util import basins, input, mat, util
 
 """
 Driver function to compute zonal and meridional wind monthly mean and
@@ -29,8 +30,8 @@ covariances, potential intensity, GPI, and saturation deficit.
 def compute_downscaling_inputs(year = 999):
     print('Computing monthly mean and variance of environmental wind...')
     s = time.time()
-    if namelist.gnu_parallel == True: env_wind.gen_wind_mean_cov(year)
-    else: env_wind.gen_wind_mean_cov()
+    #if namelist.gnu_parallel == True: env_wind.gen_wind_mean_cov(year)
+    #else: env_wind.gen_wind_mean_cov()
     e = time.time()
     print('Time Elapsed: %f s' % (e - s))
 
@@ -255,7 +256,7 @@ def run_tracks(year, n_tracks, b):
         cpl_fast = [0] * 1460
         m_init_fx = [0] * 1460
         n_seeds = np.zeros((len(basin_ids), 1460))
-
+        
         # Create array of dates to draw from and remove leap day
         start_date = datetime.datetime(year, 1, 1, 0)
         end_date = datetime.datetime(year, 12, 31, 18)
@@ -278,8 +279,9 @@ def run_tracks(year, n_tracks, b):
         # AJB: i = 0 is kept because it is referenced in many places
         # AJB: this saves time by only initializing cpl_fast over two timesteps
         # idxs = [0, 1260]
-        # idxs = [0] + list(range(604, 1336))
-        
+        # idxs = [0] + list(range(1260, 1350))
+        # ADD LINE THAT FORCES IDXS TO BE MID-MONTH
+
         for i in idxs:
             dt_6hr = dates[i]
             ds_dt_6hr = input.convert_from_datetime(ds_wnd, [dt_6hr])[0]
@@ -290,22 +292,34 @@ def run_tracks(year, n_tracks, b):
             os.makedirs(f'{namelist.output_directory}/{namelist.exp_name}/pickle_files', exist_ok=True)
             # Pickle cpl_fast objects to save on memory
             pickle_fn = os.path.join(namelist.output_directory, f'{namelist.exp_name}/pickle_files/cpl_fast_{year}_{i}.pkl')
-            if not os.path.exists(pickle_fn):
+            if not os.path.exists(pickle_fn+'a'):
                 month_index = int(dt_6hr.month - 1)
                 sys.stdout.flush()
                 vpot_6hr = np.nan_to_num(vpot.interp(time = ds_dt_6hr).data, 0)
                 rh_mid_6hr = rh_mid.interp(time = ds_dt_6hr).data
-                chi_6hr = chi.interp(time = ds_dt_6hr).data
-                chi_6hr[np.isnan(chi_6hr)] = 5
-                chi_6hr = np.maximum(np.minimum(np.exp(np.log(chi_6hr + 1e-3) + namelist.log_chi_fac) + namelist.chi_fac, 5), 1e-5)
-            
+                chi_6hr = chi.interp(time = ds_dt_6hr, method='nearest').fillna(5)
+                
+                if namelist.thermo_ts == 'monthly':
+                    start = chi.time[0].values   # Jan 15
+                    end   = chi.time[-1].values  # Dec 15
+
+                    if ds_dt_6hr < start: chi_6hr = chi.isel(time=0).fillna(5)
+                    elif ds_dt_6hr > end: chi_6hr = chi.isel(time=-1).fillna(5)
+                
+                    if namelist.chi_radius: chi_6hr = util.radial_percentile(lat, lon, chi_6hr).data
+                    else: chi_6hr = np.maximum(np.minimum(np.exp(np.log(chi_6hr + 1e-3) + namelist.log_chi_fac) + namelist.chi_fac, 5), 1e-5)
+                elif namelist.thermo_ts == 'sub-monthly':
+                    if ds_dt_6hr in chi.time.values:
+                        if namelist.chi_radius: 
+                            print('chi_radius = True')
+                            chi.loc[{'time': ds_dt_6hr}] = util.radial_percentile(lat, lon, chi_6hr).data
+                        else: chi.loc[{'time': ds_dt_6hr}] = np.maximum(np.minimum(np.exp(np.log(chi_6hr + 1e-3) + namelist.log_chi_fac) + namelist.chi_fac, 5), 1e-5)
+
                 mld_month = mat.interp_2d_grid(mld['lon'], mld['lat'], np.nan_to_num(mld[:, :, month_index]), lon, lat)
                 strat_month = mat.interp_2d_grid(strat['lon'], strat['lat'], np.nan_to_num(strat[:, :, month_index]), lon, lat)
-                # Create Coupled_FAST object
                 cpl_fast = coupled_fast.Coupled_FAST(fn_wnd_stat, b, ds_dt_6hr, namelist.output_interval_s, T_s)
                 cpl_fast.init_fields(lon, lat, chi_6hr, vpot_6hr, mld_month, strat_month)
                 
-                # Serialize and save object to a file
                 with open(pickle_fn, 'wb') as f:
                     pickle.dump(cpl_fast, f)
 
@@ -323,9 +337,7 @@ def run_tracks(year, n_tracks, b):
     tc_env_wnds = np.full((n_tracks, n_steps, len(namelist.steering_levels) * 2), np.nan)
     tc_month = np.full(n_tracks, np.nan)
     tc_basin = np.full(n_tracks, "", dtype = 'U2')
-    
     seeds_df_list = []
-
     while nt < n_tracks:
         ct = nt
         if namelist.debug: print(f"Attempting track number = {nt}")
@@ -336,8 +348,7 @@ def run_tracks(year, n_tracks, b):
             # Use fixed non-leap year to generate time seed
             time = pd.to_datetime(seed_info[input.get_time_key()][nt])
             m, d, h = time.month, time.day, time.hour
-            gen_dt  = pd.to_datetime('2001' + str(m) + str(d) + str(h), format='%Y%m%d%H')
-            
+            gen_dt  = pd.to_datetime(f'2001{m:02}{d:02}{h:02}', format='%Y%m%d%H')
             time_seed = int(((gen_dt.dayofyear - 1) * 4) + gen_dt.hour / 6) + 1
             # Put the correct year back
             gen_dt = gen_dt.replace(year=year)
@@ -379,8 +390,8 @@ def run_tracks(year, n_tracks, b):
                 if namelist.wind_ts == '6-hourly':
                     # Randomly seed the 6-hour timestep.
                     time_seed = np.random.randint(1,1461)
-                    #AJB: uncomment next line to test a single case (+1 for consistency with his code)
-                    #time_seed = idxs[1] + 1
+                    # AJB: uncomment next line to test a single case (+1 for consistency with his code)
+                    # time_seed = idxs[1] + 1
                     # Load pickle file
                     fast = load_cpl_fast(year, time_seed - 1)
 
@@ -414,8 +425,6 @@ def run_tracks(year, n_tracks, b):
         m_init = np.maximum(0, namelist.f_mInit(rh_init))
         fast.h_bl = namelist.atm_bl_depth[basin_ids[basin_idx]]
 
-        if namelist.debug: print(f'Beginning track integration...')
-            
         # For submonthly thermo data, pass in a time slice of chi and vpot, genesis timestep, lon, lat for reinit_fields
         if namelist.thermo_ts == 'sub-monthly':
             chi_track = chi.sel(time = track_dates)
@@ -446,8 +455,6 @@ def run_tracks(year, n_tracks, b):
             v_thresh_2d = np.interp(2*24*60*60, res.t, v_track.flatten())
             is_tc = np.logical_and(np.any(v_track >= v_thresh), v_thresh_2d >= namelist.seed_v_2d_threshold_ms)
 
-        #if namelist.seeding == 'manual': is_tc = True
-        print(f'is_tc: {is_tc}')
         if is_tc:
             n_time = len(track_lon)
             tc_lon[nt, 0:n_time] = track_lon

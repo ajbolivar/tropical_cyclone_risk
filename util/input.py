@@ -55,6 +55,10 @@ def _load_var(var, ct_start, ct_end):
     else:
         fns = _find_in_timerange(_glob_prefix(var), ct_start, ct_end)
         ds = _open_fns(fns).sel(time=slice(ct_start, ct_end))
+    # AJB: if long name present for lon/lat, force change
+    if 'longitude' in ds.dims:
+        ds = ds.rename({'longitude': 'lon', 'latitude': 'lat'})
+
     return ds
 
 def get_sst_key():

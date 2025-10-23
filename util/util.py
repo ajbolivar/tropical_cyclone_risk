@@ -2,10 +2,13 @@ import os
 import subprocess
 import namelist
 import numpy as np
+import xarray as xr
 import time
 from util import constants
 from scipy import interpolate
-
+from scipy.ndimage import generic_filter
+import warnings
+warnings.filterwarnings('ignore')
 """
 Inverse transform sampling.
 """
@@ -48,6 +51,55 @@ def haversine(lat1, lon1, lat2, lon2):
     c = 2 * np.arcsin(np.sqrt(a))
 
     return (constants.earth_R / 1000) * c  # distance in km
+
+def circular_footprint(radius_cells):
+    y, x = np.ogrid[-radius_cells:radius_cells+1, -radius_cells:radius_cells+1]
+    mask = x**2 + y**2 <= radius_cells**2
+    return mask.astype(int)
+
+def nanpercentile_filter(arr, percentile=90):
+    # arr is flattened footprint
+    return np.nanpercentile(arr, percentile)
+
+def apply_nanpercentile_filter(data, footprint):
+    return generic_filter(
+        data,
+        function=lambda arr: nanpercentile_filter(arr, percentile=90),
+        footprint=footprint,
+        mode='constant',  # constant mode avoids wrapping edges
+        cval=np.nan       # fill edges with NaN, will be ignored
+    )
+
+def radial_percentile(lat, lon, data, basin='GL'):
+    lat0, lon0 = float(lat.mean()), float(lon.mean())
+    grid_dx_km = haversine(lat0, lon0, lat0, lon0 + data.lon.diff('lon').mean().item())
+    grid_dy_km = haversine(lat0, lon0, lat0 + data.lat.diff('lat').mean().item(), lon0)
+    
+    r_lat = int(namelist.rchi / grid_dy_km)
+    r_lon = int(namelist.rchi / grid_dx_km)
+    
+    land_mask = xr.open_dataset(f'land/{basin}.nc')
+    land_mask = land_mask.interp(
+            lat=data.lat,
+            lon=data.lon,
+            method='nearest'
+            ).basin
+    
+    data = data.where(land_mask)
+    footprint = circular_footprint(r_lat)
+    data = xr.apply_ufunc(
+            lambda arr: apply_nanpercentile_filter(arr, footprint),
+            data,
+            input_core_dims=[['lat','lon']],
+            output_core_dims=[['lat','lon']],
+            vectorize=True,
+            dask='parallelized',
+            output_dtypes=[data.dtype]
+            )
+    
+    data = data.where(land_mask, 0) + namelist.chi_fac
+    data = np.maximum(np.minimum(data, 5), 1e-5)
+    return data
 
 def is_nc_file_valid(fn):
     is_valid = True
