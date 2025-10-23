@@ -8,7 +8,7 @@ import datetime
 import numpy as np
 import xarray as xr
 import time
-
+import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
 
 import namelist
@@ -123,6 +123,11 @@ class BetaAdvectionTrack:
         
         return(wnd_mean, wnd_cov)
 
+    def find_nearest(self, array, value):
+        array = np.asarray(array)
+        idx = (np.abs(array - value)).argmin()
+        return array[idx]
+
     """ Query env_wnd file for nearest 6-hourly winds """
     def query_wnd_nearest(self, clon, clat, ct, area_avg, shear):
         wnd_Mean = env_wind.read_env_wnd_fn(self.fn_wnd_stat, shear=shear)
@@ -130,7 +135,8 @@ class BetaAdvectionTrack:
         if area_avg:
             wnds_t = [wnd_Mean[x].sel(time=ct, method='nearest').squeeze() for x in range(len(var_Mean))]
             wnds_b = [self.basin.transform_global_field(self.wnd_lon, self.wnd_lat, wnds_t[x].transpose('lat','lon'))[2] for x in range(len(var_Mean))]
-
+            clat = self.find_nearest(wnd_Mean[0].lat.values, clat)
+            clon = self.find_nearest(wnd_Mean[0].lon.values, clon)
             distance_grid = util.haversine(clat, clon, self.wind_lat_grid, self.wind_lon_grid)
             mask = distance_grid <= namelist.rwind
        
