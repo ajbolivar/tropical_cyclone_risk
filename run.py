@@ -1,9 +1,19 @@
 import os
 import shutil
-import namelist
 import sys
+import importlib
+
+if len(sys.argv) > 3:
+    namelist_name = sys.argv[3]
+    module = importlib.import_module(f"namelists.{namelist_name}")
+
+    sys.modules['namelist'] = module
+
+import namelist
 from scripts import generate_land_masks
 from util import compute
+
+print(f"Using namelist module: {namelist.__name__}")
 
 if __name__ == '__main__':
     f_base = '%s/%s/' % (namelist.output_directory, namelist.exp_name)
@@ -11,9 +21,14 @@ if __name__ == '__main__':
     print('Saving model output to %s' % f_base)
     sys.stdout.flush()
 
-    dest_namelist = '%s/namelist.py' % f_base
-    if not os.path.exists(dest_namelist):
-        shutil.copyfile('./namelist.py', dest_namelist)
+    if len(sys.argv) > 3:
+        dest_namelist = '%s/%s.py' % (f_base, sys.argv[3])
+        if not os.path.exists(dest_namelist):
+            shutil.copyfile('namelists/%s.py' % sys.argv[3], dest_namelist)
+    else:
+        dest_namelist = '%s/namelist.py' % f_base
+        if not os.path.exists(dest_namelist):
+            shutil.copyfile('./namelist.py', dest_namelist)
 
     generate_land_masks.generate_land_masks()
     
@@ -25,11 +40,7 @@ if __name__ == '__main__':
         print('Running tracks for basin %s...' % sys.argv[1])
         sys.stdout.flush()
         
-        # Case for extra arg when running several jobs for the same year
-        try:
-            compute.run_downscaling(sys.argv[1], int(sys.argv[2]), sys.argv[3])
-        except:
-            compute.run_downscaling(sys.argv[1], int(sys.argv[2]))
+        compute.run_downscaling(sys.argv[1], int(sys.argv[2]))
 
     else:
         compute.compute_downscaling_inputs()
