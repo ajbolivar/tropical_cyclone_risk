@@ -235,27 +235,9 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
                 if not isinstance(new_dt, pd.Timestamp):
                     new_dt = pd.to_datetime(new_dt)
                 
-                if namelist.chi_radius:
-                    nearest_idx = np.argmin(np.abs(pd.to_datetime(self.times) - new_dt))
-                    chi_field = self.chi_fields[nearest_idx]
-
-                    distances = util.haversine(clat, clon, self.basin_lat_grid, self.basin_lon_grid)
-
-                    mask = distances <= namelist.rchi # Radius in km
-
-                    chi_field = self.chi_fields[nearest_idx]
-
-                    chi_local = chi_field[mask]
-                    chi_90 = np.nanpercentile(chi_local, 90)
-
-                    return chi_90
-
-                else:
-                    time_diffs = list(abs(new_dt - pd.to_datetime(self.times.astype(str))).total_seconds())
-                    nearest_idx = time_diffs.index(min(time_diffs))
-
-                    # Return the interpolated value from the correct RectBivariateSpline
-                    return self.f_chi[nearest_idx].ev(clon, clat).flatten()[0]
+                nearest_idx = np.argmin(np.abs(pd.to_datetime(self.times) - new_dt))
+                # Return the interpolated value from the correct RectBivariateSpline:
+                return self.f_chi[nearest_idx].ev(clon, clat).flatten()[0]
 
             else:
                 return self.f_chi.ev(clon, clat).flatten()[0]
@@ -271,7 +253,6 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
 
     """ Define the first ODE in the coupled set, Equation 2.
     For now, use a drag coefficient, constant boundary layer depth,
-    constant thermodynamic efficiency (Equation 8), and constant
     kappa (Equation 9). This means beta is constant (Equation 6).
     However, alpha still varies (Equation 4, 5) with time, which means
     gamma must vary with time as well (Equation 7).
@@ -345,7 +326,6 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
         v_bam, env_wnds, env_wnds_shr = self._step_bam_track(y[0], y[1], t, steering_coefs)
         dLondt = v_bam[0] / constants.earth_R * 180. / np.pi / (np.cos(y[1] * np.pi / 180.))
         dLatdt = v_bam[1] / constants.earth_R * 180. / np.pi
-
         dvdt = self._dvdt(y[0], y[1], y[2], y[3], v_bam, t, new_dt)
         dmdt = self._dmdt(y[0], y[1], y[2], y[3], env_wnds_shr, t, new_dt)
         vpot = self._get_current_vpot(y[0], y[1], new_dt)
@@ -388,25 +368,17 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
         f_chi = []
         f_vpot = []
         self.times = chi.time.values # array of datetimes
-        chi_fields = []  # Store transformed chi fields
+        self.chi_fields = []
         
         for i in range(0, len(self.times)):
             lon_b, lat_b, chi_b = self.basin.transform_global_field(lon, lat, chi.isel(time = i).data)
             _, _, vpot_b = self.basin.transform_global_field(lon, lat, vpot.isel(time = i).data)
-            chi_b[np.isnan(chi_b)] = 5
-            
-            if not namelist.chi_radius:
-                chi_b = np.maximum(np.minimum(np.exp(np.log(chi_b + 1e-3) + namelist.log_chi_fac) + namelist.chi_fac, 5), 1e-5)
-            
-            chi_fields.append(chi_b)
             f_chi.append(RectBivariateSpline(lon_b, lat_b, chi_b.T, kx=1, ky=1))
             f_vpot.append(RectBivariateSpline(lon_b, lat_b, vpot_b.T, kx=1, ky=1))
+            self.chi_fields.append(chi_b)
 
-        self.chi_fields = chi_fields
         self.f_chi = f_chi
         self.f_vpot = f_vpot
-        self.lon_b, self.lat_b = lon_b, lat_b
-        self.basin_lat_grid, self.basin_lon_grid = np.meshgrid(lat_b, lon_b, indexing='ij')
 
     """ Generate a track with an initial position of (clon, clat),
         an initial intensity of v, and initial inner core moisture m """
@@ -467,3 +439,4 @@ class Coupled_FAST(bam_track.BetaAdvectionTrack):
             raise ValueError("Invalid integration method specified. Options: 'RK4', 'RK45'")
 
         return res
+#!/usr/bin/env python
