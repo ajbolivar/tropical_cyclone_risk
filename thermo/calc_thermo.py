@@ -27,8 +27,11 @@ def get_fn_thermo(year = 999):
     return(fn_th)
 
 def running_mean_xr(data, var, dim, n):
-    var_sm = data[var].rolling({dim: n}, min_periods=1, center=True).mean()
-    data[var] = var_sm
+    if isinstance(var, str): var = [var]
+
+    for v in var:
+        var_sm = data[v].rolling({dim: n}, min_periods=1, center=True).mean()
+        data[v] = var_sm
 
     return data
 
@@ -40,7 +43,6 @@ def compute_thermo(dt_start, dt_end):
     lon_ky = input.get_lon_key()
     lat_ky = input.get_lat_key()
     sst_ky = input.get_sst_key()
-    
     # Check to make sure all necessary timesteps of t, sst, psl, and q are available for
     # computation of thermodynamic quantities
     for ds in [ds_sst, ds_psl, ds_ta, ds_hus]:
@@ -120,7 +122,7 @@ def gen_thermo(year = 999):
 
     # Load datasets metadata. Since SST is split into multiple files and can
     # cause parallel reads with open_mfdataset to hang, save as a single file.
-    if namelist.gnu_parallel == True: 
+    if namelist.gnu_parallel == True:
         dt_start = datetime.datetime(year, 1, 1, 0)
         dt_end = datetime.datetime(year, 12, 31, 18)
     else: dt_start, dt_end = input.get_bounding_times()
@@ -155,7 +157,11 @@ def gen_thermo(year = 999):
     for i in range(len(chunks)):
         lazy_result = dask.delayed(compute_thermo)(chunks[i][0], chunks[i][-1])
         lazy_results.append(lazy_result)
-    out = dask.compute(*lazy_results, scheduler = 'processes', num_workers = n_chunks)
+   
+    if namelist.gnu_parallel:
+        out = [compute_thermo(chunks[0][0], chunks[0][-1])]
+    else:
+        out = dask.compute(*lazy_results, scheduler = 'processes', num_workers = n_chunks)
 
     # Clean up and process output.
     if namelist.thermo_ts == 'sub-monthly':
@@ -169,7 +175,6 @@ def gen_thermo(year = 999):
                     np.array([datetime.datetime(x.year, x.month, 15) for x in
                              [x for x in input.convert_to_datetime(ds, ds['time'].values)
                              if x >= ct_bounds[0] and x <= ct_bounds[1]]]))
-    
     vmax = np.concatenate([x[0] for x in out], axis = 0)
     chi = np.concatenate([x[1] for x in out], axis = 0)
     rh_mid = np.concatenate([x[2] for x in out], axis = 0)
@@ -180,5 +185,15 @@ def gen_thermo(year = 999):
                            coords = dict(lon = ("lon", ds[input.get_lon_key()].data),
                                          lat = ("lat", ds[input.get_lat_key()].data),
                                          time = ("time", ds_times)))
+    
+
+    #if isinstance(namelist.window, int):
+    #    ds_thermo = running_mean_xr(ds_thermo,
+    #                                ['vmax', 'chi', 'rh_mid'],
+    #                                'time', 
+    #                                namelist.window)
+    #elif isinstance(namelist.window, float):
+    #    print('Warning: namelist parameter \'window\' must be an integer. Running mean calculation bypassed.')
+
     ds_thermo.to_netcdf(fn_out)
     print('Saved %s' % fn_out)
